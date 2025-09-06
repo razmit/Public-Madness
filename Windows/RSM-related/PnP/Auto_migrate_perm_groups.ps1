@@ -1,53 +1,453 @@
-<#
-    Get all the permission groups from the requested site. Can be SOURCE or DESTINATION.
-#>
-
-function Get-AllGroupsFromRequestedSite {
+# Function to connect to the requested site and retry if it failed
+function Connect-IndicatedSite {
     param (
-        [string]$TargetSiteGroups,
-        [string]$TypeOfSite
+        [string]$SiteUrl
     )
     
-    Write-Host "There are several permission groups inside the site collection. At the end of the list, write the number of the $TypeOfSite permissions group you want to select: " 
+    $failCounter = 0
+    $maxRetries = 3
+    $connected = $false
     
-    Write-Output "Passed groups: "$TargetSiteGroups
-
-    # Display all results in a more visual style
-    for ($i = 0; $i -lt $TargetSiteGroups.Count; $i++) {
-        # $normalNum = $sourceSiteGroups | Select-Object -ExpandProperty Id -SkipIndex ($sourceSiteGroups.Count - $i)
-        Write-Host "$($TargetSiteGroups[$i].Id)" $TargetSiteGroups[$i].Title -ForegroundColor White -BackgroundColor DarkGray
+    do {
+        try {
+            $SiteUrl = $SiteUrl.TrimStart()
+            Write-Host "Connecting to the site... (Attempt $failCounter of $maxRetries)" -ForegroundColor Yellow
+            Connect-PnPOnline -Url $SiteUrl -clientId f6666fe0-04e6-419a-b4bb-4025060af8f5 -interactive
+            Write-Host "Connection successful!" -ForegroundColor Green
+            $connected = $true
+            break # Exit upon success
+        }
+        catch {
+            Write-Host "Connection attempt $($failCounter+1) failed: $($_.Exception.Message)" -ForegroundColor Red
+            $failCounter++
+            
+            if ($failCounter -le $maxRetries) {
+                Write-Host "Retrying in 2 seconds..." -ForegroundColor Yellow
+                Start-Sleep -Seconds 2
+            }
+        }   
+    } while ($failCounter -le $maxRetries -and -not $connected) #Don't exit until all attempts were used and it's NOT connected | $connected = $false
+    
+    if (-not $connected) {
+        Write-Host "All connection attempts failed. Unable to connect to $SiteUrl" -ForegroundColor Red
+        return $false
     }
     
-    $confirmedGroup = Read-Host "Select one of the $TypeOfSite sites shown in the list of matches for what you wrote"
-    
-    $chosenSourceGroup = $TargetSiteGroups | Where-Object { $_.Id -eq $confirmedGroup }
+    return $true
+}
 
-    Write-Output "The chosen SOURCE group is: "$chosenSourceGroup
+# Function to ensure that the user has not left the input field empty or is malicious
+function Test-UserInput {
+    param (
+        [string]$UserInput
+    )
+    
+    Write-Output "Incoming text to validate: "$UserInput
+    # Validate if the input is empty or not
+    $UserInput = $UserInput.Trim()
+    if ([string]::IsNullOrWhiteSpace($UserInput)) {
+        Write-Host -BackgroundColor Red -ForegroundColor White "The name can't be empty. Write something to search."
+        
+        return $false
+    }
+    else {
+        # Validate that the input is at least 3 characters long
+        if ($UserInput.Length -lt 3) {
+            Write-Host -BackgroundColor Red -ForegroundColor White "The name to search has to be at least 3 characters long"
+            return $false
+        }
+        else {
+            return $true
+        }
+    }
+    
+}
+
+function Start-Migration {
+    param (
+        $ValidGroups,
+        $ValidMembers,
+        $ValidPermissions,
+        $DestinationSite
+    )
+    
+    Connect-IndicatedSite -SiteUrl $DestinationSite
+    
+    foreach ($group in $ValidGroups) {
+        # Write-Host "Title: $($group.Title) | Description: $($group.Description) | Owner: $($group.OwnerTitle)"
+        # Keep the name of the newly created group
+        $newlyCreatedGroup = New-PnPGroup -Title $group.Title -Description $group.Description -Owner $group.OwnerTitle -ErrorAction SilentlyContinue
+        # Give it a second to process
+        Start-Sleep -Seconds 1
+        # Begin adding the members to the newly created group
+        foreach ($member in $ValidMembers) {
+            foreach ($mem in $member["Members"]) {
+                Add-PnPGroupMember -LoginName $mem -Group $newlyCreatedGroup -ErrorAction SilentlyContinue
+            }
+        }
+        
+        Start-Sleep -Seconds 1
+        # Begin adding the permissions to the newly created group
+        foreach ($perm in $ValidPermissions) {
+            # Write-Host "Group title: $($perm["Title"]) | Permissions count: $($perm["Permissions"].Count)"
+            foreach ($per in $perm["Permissions"]) {
+                Set-PnPGroupPermissions -Identity $newlyCreatedGroup -AddRole $per -ErrorAction SilentlyContinue
+            }
+        }
+    }
+    
+    # Print out the result
+    $RoleAssignments = (Get-PnPWeb -Includes RoleAssignments).RoleAssignments
+    foreach ($RoleAssignment in $RoleAssignments) {
+        #Get the role definition bindings
+        $RoleDefinitionBindings = Get-PnPProperty -ClientObject $RoleAssignment -Property RoleDefinitionBindings
+        #Get the member details
+        $Member = Get-PnPProperty -ClientObject $RoleAssignment -Property member
+        #Output the role assignment and role definition
+        Write-Host "$($member.GetType().name): $($Member.Title) - Role: $($RoleDefinitionBindings.Name)"
+    }
+    
+    Write-Host "Groups created successfully!"
+    Start-Sleep -Seconds 2
+}
+
+# Get all members of a group
+function Get-GroupMembers {
+    param (
+        $GroupNames,
+        $SourceSiteName
+    )
+    Connect-IndicatedSite -SiteUrl $SourceSiteName
+    $groupsMembers = @()
+    
+    foreach ($group in $GroupNames) {
+        $returnedMemberLoginName = Get-PnPGroupMember -Identity $group["Title"].ToString() | Select-Object -Property LoginName -ExpandProperty LoginName | Where-Object { $null -ne $_.LoginName }
+        
+        if ($null -eq $returnedMemberLoginName) {
+            continue
+        }
+        
+        $returnedMembers = @{
+            Title   = $group["Title"]
+            Members = $returnedMemberLoginName ?? "n/a"
+        } 
+        $groupsMembers += $returnedMembers
+    }
+    
+    # foreach ($member in $groupsMembers) {
+    #     Write-Host "Group title: $($member["Title"]) | Members count: $($member["Members"].Count)"
+    #     foreach ($mem in $member["Members"]) {
+    #         Write-Host "Member: $mem"
+    #     }
+    # }
+    
+    return $groupsMembers
+}
+
+# Get the permissions of the requested group
+
+function Get-GroupsPermissions {
+    param (
+        $SiteName,
+        $GroupNames
+    )
+    $groupData = @()
+    
+    foreach ($group in $GroupNames) {
+        $groupPermissions = Get-PnPGroupPermissions -Identity $group["Title"].ToString() | Select-Object -Property Name -ExpandProperty Name
+        
+        if ($null -eq $groupPermissions) {
+            continue
+        }
+        
+        $returnedPerms = @{
+            Title       = $group["Title"]
+            Permissions = $groupPermissions
+        }        
+        $groupData += $returnedPerms
+    }
+    
+    Write-Host "Group data count: "$groupData.Count
+    
+    # foreach ($perm in $groupData) {
+    #     Write-Host "Group title: $($perm["Title"]) | Permissions count: $($perm["Permissions"].Count)"
+    #     foreach ($per in $perm["Permissions"]) {
+    #         Write-Host "Permission: "$per
+    #     }
+    # }
+    
+    return $groupData
+    
+}
+
+# Function to create a new group in the DESTINATION site
+function New-GroupInDestination {
+    param (
+        $DestinationSiteName,
+        $GroupsToCreate,
+        $PassthroughSourceName
+    )
+    
+    # Connect to destination site
+    Connect-IndicatedSite -SiteUrl $DestinationSiteName
+    
+    $groupData = @()
+    
+    foreach ($group in $GroupsToCreate) {
+        # Extract only the properties I want to transfer
+        $groupInfo = @{
+            Title       = $group.Title ?? ""
+            OwnerTitle  = $group.OwnerTitle ?? ""
+            Description = $group.Description ?? ""
+            Id          = $group.Id ?? $null
+        }
+        
+        $groupData += $groupInfo
+        
+        Write-Host "Extracted - Title: $($groupInfo.Title) | Owner: $($groupInfo.OwnerTitle)" -ForegroundColor Green
+    }
+    
+    Write-Host "`nSummary: Processed $($groupData.Count) groups" -ForegroundColor Cyan
+    $groupsMembers = Get-GroupMembers -GroupNames $groupData -SourceSiteName $PassthroughSourceName
+    
+    $groupsPermissions = Get-GroupsPermissions -GroupNames $groupData -SiteName $PassthroughSourceName
+    
+    <#
+        We have 3 lists:
+        * $groupData => contains the information about the existing groups in the SOURCE
+        * $groupsMembers => Contains the members of the existing groups
+        * $groupsPermissions => Contains the permissions of the existing groups
+        
+        We have to compare the lists to make sure all of the Title fields lign up. The $groupsPermissions list is the authority, since groups with NO permissions have been removed from it. No permissions = Group not important and shouldn't be migrated.
+    #>
+    
+    # Authoritative list of Titles
+    $validGroupTitles = $groupsPermissions | ForEach-Object { $_.Title }
+    
+    # Matching list of Titles from Groups
+    $filteredGroups = $groupData | Where-Object { $_.Title -in $validGroupTitles }
+    
+    # Matching list of Titles from Members
+    $filteredMembers = $groupsMembers | Where-Object { $_.Title -in $validGroupTitles }
+    
+    Write-Host "Ready to migrate with $($validGroupTitles.Count). Trust in the Omnisiah. "
+    
+    # Send everything to start the copying
+    Start-Migration -ValidGroups $filteredGroups -ValidMembers $filteredMembers -ValidPermissions $groupsPermissions -DestinationSite $DestinationSiteName
+}
+
+# Function to determine which groups are already in destination and which ones aren't
+
+function Copy-SourceGroupsToDestination {
+    param (
+        $SourceSiteGroups,
+        $DestinationSiteGroups
+    )
+    
+    # Only keep the groups that are NOT already in the destination site
+    $sourceNames = $SourceSiteGroups.Title
+    $destinationNames = $DestinationSiteGroups.Title
+    
+    $differences = Compare-Object -ReferenceObject $destinationNames -DifferenceObject $sourceNames | Where-Object { $_.SideIndicator -eq "=>" }
+    
+    $groupsToMigrate = $SourceSiteGroups | Where-Object { $_.Title -in $differences.InputObject }
+    
+    if ($groupsToMigrate.Count -eq 0) {
+        return 0
+    }
+    
+    return $groupsToMigrate
+    
 }
 
 <# 
     Function to acquire the permission groups of the chosen sites, both SOURCE and DESTINATION
 #>
-function Search-RequestedSite {
+function Search-RequestedSites {
     param (
         [string]$SourceSiteName,
         [string]$DestinationSiteName
     )
+    $sourceSearched = $false
+    $destinationSearched = $false
+    $sourceGroups = @()
+    $destinationGroups = @()
     
-    Write-Output "Source site name: "$SourceSiteName
+    do {
+        
+        foreach ($param in $PSBoundParameters.Keys) {            
+            try {
+                # Connect to the site with dynamic URL
+                Connect-IndicatedSite -SiteUrl $PSBoundParameters[$param]
+                
+                if ($param -eq "SourceSiteName") {
+                    $sourceGroups = Get-PnPGroup | Where-Object { ($_.Title -notlike "Limited Access System Group*") -and ($_.Title -notlike "SharingLinks*") } | Sort-Object -Property Id
+                    $sourceSearched = $true
+                }
+                elseif ($param -eq "DestinationSiteName") {
+                    $destinationGroups = Get-PNPGroup | Where-Object { ($_.Title -notlike "Limited Access System Group*") -and ($_.Title -notlike "SharingLinks*") } | Sort-Object -Property Id
+                    $destinationSearched = $true
+                } 
     
-    # Connect to the SOURCE site 
-    Connect-PnPOnline -Url $SourceSiteName -clientId f6666fe0-04e6-419a-b4bb-4025060af8f5 -interactive
+                foreach ($group in $siteGroups) {
+                    Write-Host "Group: "$group.LoginName
+                }
+            }
+            catch {
+                Write-Host "A connection to the site could not be completed. Error: "$_.Exception.Message -ForegroundColor Red
+            }
+        }
+        
+    } while (-not $sourceSearched -and -not $destinationSearched)
     
-    Get-PnPGroup
-    # Get the SOURCE site permission groups. These are exclusively SHAREPOINT GROUPS, not AD groups
-    $sourceSiteGroups = Get-PnPGroup | Sort-Object -Property Id 
+    if (($sourceSearched -and $destinationSearched) -and ($null -ne $sourceGroups -and $null -ne $destinationGroups)) {
+        Write-Host "Groups and permissions acquired for both sites. Moving to migration..." -ForegroundColor Yellow
+        $groupsToMigrate = Copy-SourceGroupsToDestination -SourceSiteGroups $sourceGroups -DestinationSiteGroups $destinationGroups
+        
+        if ($groupsToMigrate.Count -eq 0) {
+            Write-Host "There are no differences between the sites. All groups are the same between the two." -ForegroundColor Yellow
+            return
+        }
+        elseif ($groupsToMigrate.Count -ge 1) {
+            Write-Host "There are $($groupsToMigrate.Count) groups to migrate. This might take a while..." -ForegroundColor DarkCyan
+            
+            New-GroupInDestination -DestinationSiteName $DestinationSiteName -GroupsToCreate $groupsToMigrate -PassthroughSourceName $SourceSiteName
+        }
+    }
+    else {
+        Write-Host "Groups could not be acquired from either of the sites. Terminating..." -ForegroundColor Red
+        exit
+    }   
+}
+
+# Search for the SOURCE site that the user wants
+function Get-SearchedSourceSite {
     
-    Write-Output "Source site groups: "$sourceSiteGroups
+    param(
+        $CSVFileOfSites
+    )
+    try {
+        # To determine if *any* site was found at all
+        $validSite = $true
+        # Validate if the input is empty or too short
+        :urlsearch do {
+            :inputverification do {
+                [string]$sourceSiteToSearch = Read-Host "Please enter the URL of the site you want to use as a SOURCE. A partial URL is fine, too"
+            
+                $isValid = Test-UserInput -UserInput $sourceSiteToSearch
+            } while (-not $isValid)
+            
+            # Import the recently created CSV file of all of the site collections to search for the one that the user wrote, even if it's a partial name
+            $foundSourceSite = Import-Csv -Path $CSVFileOfSites | Where-Object { $_.Url -like "*$sourceSiteToSearch*" } | Select-Object Status, Url
+
+            # Store the chosen site
+            $chosenSourceSite
+
+            # Determine if the results are empty because no site is named like what the user requested
+            if ($null -eq $foundSourceSite) {
+                Write-Host "No sites were found with that name. Try with something else." -ForegroundColor DarkYellow -BackgroundColor DarkCyan 
+                $validSite = $false
+                continue
+            }
+            elseif ($foundSourceSite.Count -gt 1) {
+                # Check if the results return anything other than 1 match
+                Write-Host "The name you wrote returned several matches. At the end of the list, write the number of the SOURCE site you want to select: " 
     
-    Get-AllGroupsFromRequestedSite -TargetSiteGroups $sourceSiteGroups -TypeOfSite "source"
+                # Display all results in a more visual style
+                for ($i = 0; $i -lt $foundSourceSite.Count; $i++) {
+                    $normalNum = $i + 1
+                    Write-Host "($normalNum)" $foundSourceSite[$i].Url -ForegroundColor DarkCyan -BackgroundColor DarkGray
+                }
     
+                $confirmedSite = Read-Host "Select one of the SOURCE sites shown in the list of matches for what you wrote"
     
+                $chosenSourceSite = $foundSourceSite[$confirmedSite - 1].Url
+                $validSite = $true
+            }
+            else {
+                # In case there's only 1 result
+                $chosenSourceSite = $foundSourceSite.Url
+            }
+
+            Write-Host "The chosen SOURCE site is: "$chosenSourceSite -ForegroundColor DarkCyan -BackgroundColor DarkGray
+            
+            return $chosenSourceSite
+        } while (-not $validSite)
+        
+        
+    }
+    catch {
+        Write-Host "Failed to find the requested SOURCE site. Error: " -ForegroundColor Red
+        # Generic catch for any other error
+        Write-Host "Unexpected error occurred:" -ForegroundColor Red
+        Write-Host "Type: $($_.Exception.GetType().FullName)" -ForegroundColor Red
+        Write-Host "Message: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
+# Search for the DESTINATION site that the user wants
+function Get-SearchedDestinationSite {
+    
+    param(
+        $CSVFileOfSites
+    )
+    try {
+        # To determine if *any* site was found at all
+        $validSite = $true
+        # Validate if the input is empty or too short
+        :urlsearch do {
+            :inputverification do {
+                [string]$destinationSiteToSearch = Read-Host "Please enter the URL of the site you want to use as a DESTINATION. A partial URL is fine, too"
+            
+                $isValid = Test-UserInput -UserInput $destinationSiteToSearch
+            } while (-not $isValid)
+            
+            # Import the recently created CSV file of all of the site collections to search for the one that the user wrote, even if it's a partial name
+            $foundDestinationSite = Import-Csv -Path $CSVFileOfSites | Where-Object { $_.Url -like "*$destinationSiteToSearch*" } | Select-Object Status, Url
+
+            # Store the chosen site
+            $chosenDestinationSite
+
+            # Determine if the results are empty because no site is named like what the user requested
+            if ($null -eq $foundDestinationSite) {
+                Write-Host "No sites were found with that name. Try with something else." -ForegroundColor DarkYellow -BackgroundColor DarkCyan 
+                $validSite = $false
+                continue
+            }
+            elseif ($foundDestinationSite.Count -gt 1) {
+                # Check if the results return anything other than 1 match
+                Write-Host "The name you wrote returned several matches. At the end of the list, write the number of the DESTINATION site you want to select: " 
+    
+                # Display all results in a more visual style
+                for ($i = 0; $i -lt $foundDestinationSite.Count; $i++) {
+                    $normalNum = $i + 1
+                    Write-Host "($normalNum)" $foundDestinationSite[$i].Url -ForegroundColor DarkCyan -BackgroundColor DarkGray
+                }
+    
+                $confirmedSite = Read-Host "Select one of the DESTINATION sites shown in the list of matches for what you wrote"
+    
+                $chosenDestinationSite = $foundDestinationSite[$confirmedSite - 1].Url
+                $validSite = $true
+            }
+            else {
+                # In case there's only 1 result
+                $chosenDestinationSite = $foundDestinationSite.Url
+            }
+
+            Write-Host "The chosen DESTINATION site is: "$chosenDestinationSite -ForegroundColor DarkCyan -BackgroundColor DarkGray
+            
+            return $chosenDestinationSite
+        } while (-not $validSite)
+        
+        
+    }
+    catch {
+        Write-Host "Failed to find the requested DESTINATION site." -ForegroundColor Red
+        # Generic catch for any other error
+        Write-Host "Unexpected error occurred:" -ForegroundColor Red
+        Write-Host "Type: $($_.Exception.GetType().FullName)" -ForegroundColor Red
+        Write-Host "Message: $($_.Exception.Message)" -ForegroundColor Red
+    }
 }
 
 # Execute only on Wednesdays
@@ -64,12 +464,16 @@ if ((Get-Date).DayOfWeek -eq 'Wednesday') {
     else {
         Write-Host "It's Wednesday! Brace yourself, the report is being generated. Praise the Omnisiah."
     
-        Start-Process powershell.exe -ArgumentList '-File', .\Export_tenant_sites_to_csv.ps1 -Wait
+        $connectionResult = Start-Process powershell.exe -ArgumentList '-File', .\Export_tenant_sites_to_csv.ps1 -Wait
+        
+        Write-Output $connectionResult
+        
+        if (-not $connectionResult.Success) {
+            Write-Host "Failed to connect: "$connectionResult.Message -ForegroundColor DarkYellow
+            exit
+        }
     }
 }
-<#
-    Section to handle the choosing of the SOURCE site for the permissions groups
-#>
 
 <# 
   ______       _                            _       _   
@@ -127,6 +531,7 @@ $optionsMenu = @'
 +--------------------------------------------------+
 '@
 
+# Variable to determine if we should keep the script running
 $keepRunning = $true
 
 do {
@@ -140,76 +545,23 @@ do {
             exit
         }
         Write-Host "Starting Migration-Man..." -ForegroundColor Green
-        Start-Sleep -Seconds 1
-        
-        [string]$sourceSiteToSearch = Read-Host "Please enter the URL of the site you want to use as a SOURCE. A partial URL is fine, too"
+        Start-Sleep -Seconds 1        
 
         # Get the latest created CSV file. Since these are supposed to run every Wednesday, the one chosen will always be the most up to date. The resulting file name will have the full path (FullName)
         $latestFile = Get-ChildItem -Path "C:\Users\E095713\Downloads\SiteCollection-Reports\" -Attributes !D *.* | Sort-Object -Descending -Property CreationTime | Select-Object -First 1 -ExpandProperty FullName
+        
+        # Variable to store the selected SOURCE site
+        $resultOfSearchingForSourceSite = Get-SearchedSourceSite -CSVFileOfSites $latestFile 
+        
+        
+        # Variable to store the selected DESTINATION site
+        $resultOfSearchingForDestinationSite = Get-SearchedDestinationSite -CSVFileOfSites $latestFile
 
-        # Import the recently created CSV file of all of the site collections to search for the one that the user wrote, even if it's a partial name
-        $foundSourceSite = Import-Csv -Path $latestFile | Where-Object { $_.Url -like "*$sourceSiteToSearch*" } | Select-Object Status, Url
-
-        # Store the chosen site
-        $chosenSourceSite
-
-        # Check if the results return anything other than 1 match
-        if ($foundSourceSite.Count -ne 1) {
-            Write-Host "The name you wrote returned several matches. At the end of the list, write the number of the SOURCE site you want to select: " 
-    
-            # Display all results in a more visual style
-            for ($i = 0; $i -lt $foundSourceSite.Count; $i++) {
-                $normalNum = $i + 1
-                Write-Host "($normalNum)" $foundSourceSite[$i].Url -ForegroundColor DarkCyan -BackgroundColor DarkGray
-            }
-    
-            $confirmedSite = Read-Host "Select one of the SOURCE sites shown in the list of matches for what you wrote"
-    
-            $chosenSourceSite = $foundSourceSite[$confirmedSite - 1].Url
-        }
-        else {
-            # In case there's only 1 result
-            $chosenSourceSite = $foundSourceSite.Url
-        }
-
-        Write-Host "The chosen SOURCE site is: "$chosenSourceSite
-
-        <#
-        Section to handle the DESTINATION site for the copying of the permisions groups
-        i.e. where the SOURCE site was migrated to
-        #>
-
-        [string]$destinationSiteToSearch = Read-Host "Please enter the URL of the site you want to use as a DESTINATION. A partial URL is fine, too"
-
-        $foundDestinationSite = Import-Csv -Path $latestFile | Where-Object { $_.Url -like "*$destinationSiteToSearch*" } | Select-Object Status, Url
-
-        $chosenDestinationSiteName
-
-        # Check if the results return anything other than 1 match
-        if ($foundDestinationSite.Count -ne 1) {
-            Write-Host "The name you wrote returned several matches. At the end of the list, write the number of the DESTINATION site you want to select: " 
-    
-            # Display all results in a more visual style
-            for ($i = 0; $i -lt $foundDestinationSite.Count; $i++) {
-                $normalNum = $i + 1
-                Write-Host "($normalNum)" $foundDestinationSite[$i].Url -ForegroundColor DarkCyan -BackgroundColor DarkGray
-            }
-    
-            $confirmedSite = Read-Host "Select one of the DESTINATION sites shown in the list of matches for what you wrote"
-    
-            $chosenDestinationSiteName = $foundDestinationSite[$confirmedSite - 1].Url
-        }
-        else {
-            # In case there's only 1 result
-            $chosenDestinationSiteName = $foundDestinationSite.Url
-        }
-
-        Write-Host "The chosen DESTINATION site is: "$chosenDestinationSiteName
-
-        # Send both site names to the function
-        Search-RequestedSite -SourceSiteName $chosenSourceSite -DestinationSiteName $chosenDestinationSiteName
+        # Send both site names to the function for getting their permission groups
+        Search-RequestedSites -SourceSiteName $resultOfSearchingForSourceSite -DestinationSiteName $resultOfSearchingForDestinationSite
     }
     catch {
-    
+        Write-Host "Critical error: "$_.Exception.Message -ForegroundColor Red
+        exit
     }
 } while ($keepRunning)
