@@ -26,7 +26,7 @@ function Connect-IndicatedSite {
                 Start-Sleep -Seconds 2
             }
         }   
-    } while ($failCounter -eq $maxRetries -and -not $connected) #Don't exit until all attempts were used and it's NOT connected | $connected = $false
+    } while ($failCounter -le $maxRetries -and -not $connected) #Don't exit until all attempts were used and it's NOT connected | $connected = $false
     
     if (-not $connected) {
         Write-Host "All connection attempts failed. Unable to connect to $SiteUrl" -ForegroundColor Red
@@ -94,6 +94,7 @@ function Start-Migration {
                 }
                 
                 Write-Host "✓ Created group: $($group.Title)" -ForegroundColor Green
+                $successfulGroups += $group.Title
                 # Give it a second to process
                 Start-Sleep -Seconds 1
                 
@@ -103,7 +104,6 @@ function Start-Migration {
                     foreach ($mem in $member["Members"]) {
                         try {
                             Add-PnPGroupMember -LoginName $mem -Group $newlyCreatedGroup -ErrorAction Stop
-                            $successfulGroups += $group.Title
                             $memberCount++
                         }
                         catch {
