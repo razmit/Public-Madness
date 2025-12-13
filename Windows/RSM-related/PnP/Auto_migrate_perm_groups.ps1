@@ -18,9 +18,14 @@ function Connect-IndicatedSite {
             break # Exit upon success
         }
         catch {
-            Write-Host "Connection attempt $($failCounter+1) failed: $($_.Exception.Message)" -ForegroundColor Red
+            # Suppress verbose PnP auth errors (they're often transient)
+            if ($_.Exception.Message -notlike "*parse near offset*" -and $_.Exception.Message -notlike "*ASCII digit*") {
+                Write-Host "Connection attempt $($failCounter+1) failed: $($_.Exception.Message)" -ForegroundColor Red
+            } else {
+                Write-Host "Connection attempt $($failCounter+1) failed (authentication flow issue - retrying...)" -ForegroundColor Red
+            }
             $failCounter++
-            
+
             if ($failCounter -le $maxRetries) {
                 Write-Host "Retrying in 2 seconds..." -ForegroundColor Yellow
                 Start-Sleep -Seconds 2
@@ -118,7 +123,7 @@ function Start-Migration {
                     foreach ($mem in $member["Members"]) {
                         try {
                             if ($DryRun) {
-                                Write-Host "  [DRY-RUN] Would add member: $mem" -ForegroundColor DarkYellow
+                                # Don't print individual members - too much output
                                 $memberCount++
                             } else {
                                 Add-PnPGroupMember -LoginName $mem -Group $newlyCreatedGroup -ErrorAction Stop
@@ -145,7 +150,7 @@ function Start-Migration {
                     foreach ($per in $perm["Permissions"]) {
                         try {
                             if ($DryRun) {
-                                Write-Host "  [DRY-RUN] Would add permission: $per" -ForegroundColor DarkYellow
+                                # Don't print individual permissions - too much output
                                 $permCount++
                             } else {
                                 Set-PnPGroupPermissions -Identity $newlyCreatedGroup -AddRole $per -ErrorAction Stop
@@ -714,11 +719,15 @@ function Search-RequestedSites {
     
     do {
         
-        foreach ($param in $PSBoundParameters.Keys) {            
+        foreach ($param in $PSBoundParameters.Keys) {
             try {
                 # Connect to the site with dynamic URL
-                Connect-IndicatedSite -SiteUrl $PSBoundParameters[$param]
-                
+                $connectionResult = Connect-IndicatedSite -SiteUrl $PSBoundParameters[$param]
+
+                if (-not $connectionResult) {
+                    throw "Failed to connect to site"
+                }
+
                 if ($param -eq "SourceSiteName") {
                     $sourceGroups = Get-PnPGroup | Where-Object { ($_.Title -notlike "Limited Access System Group*") -and ($_.Title -notlike "SharingLinks*") } | Sort-Object -Property Id
                     $sourceSearched = $true
@@ -726,7 +735,7 @@ function Search-RequestedSites {
                 elseif ($param -eq "DestinationSiteName") {
                     $destinationGroups = Get-PNPGroup | Where-Object { ($_.Title -notlike "Limited Access System Group*") -and ($_.Title -notlike "SharingLinks*") } | Sort-Object -Property Id
                     $destinationSearched = $true
-                } 
+                }
             }
             catch {
                 Write-Host "A connection to the site could not be completed. Error: "$_.Exception.Message -ForegroundColor Red
@@ -763,7 +772,7 @@ function Search-RequestedSites {
         if ($scanItemPerms.ToLower() -eq "y") {
             # Scan source site
             Write-Host "`nScanning SOURCE site for broken inheritance..." -ForegroundColor Yellow
-            Connect-IndicatedSite -SiteUrl $SourceSiteName
+            $null = Connect-IndicatedSite -SiteUrl $SourceSiteName
             $sourceItemsWithUniquePerms = Get-ItemsWithBrokenInheritance -SiteUrl $SourceSiteName
 
             if ($sourceItemsWithUniquePerms.Count -gt 0) {
@@ -773,7 +782,7 @@ function Search-RequestedSites {
 
                 if ($applyPerms.ToLower() -eq "y") {
                     # Connect to destination and apply permissions
-                    Connect-IndicatedSite -SiteUrl $DestinationSiteName
+                    $null = Connect-IndicatedSite -SiteUrl $DestinationSiteName
 
                     if ($DryRun) {
                         Set-ItemLevelPermissions -SourceItems $sourceItemsWithUniquePerms -DestinationSiteUrl $DestinationSiteName -DryRun
@@ -800,12 +809,12 @@ function Search-RequestedSites {
         if ($exportPerms.ToLower() -eq "y") {
             # Export SOURCE permissions
             Write-Host "`nExporting SOURCE site permissions..." -ForegroundColor Yellow
-            Connect-IndicatedSite -SiteUrl $SourceSiteName
+            $null = Connect-IndicatedSite -SiteUrl $SourceSiteName
             $sourceExportFile = Export-PermissionsToCSV -SiteUrl $SourceSiteName -SiteName "SOURCE"
 
             # Export DESTINATION permissions
             Write-Host "`nExporting DESTINATION site permissions..." -ForegroundColor Yellow
-            Connect-IndicatedSite -SiteUrl $DestinationSiteName
+            $null = Connect-IndicatedSite -SiteUrl $DestinationSiteName
             $destExportFile = Export-PermissionsToCSV -SiteUrl $DestinationSiteName -SiteName "DESTINATION"
 
             Write-Host "`n✓ Audit trail complete!" -ForegroundColor Green
