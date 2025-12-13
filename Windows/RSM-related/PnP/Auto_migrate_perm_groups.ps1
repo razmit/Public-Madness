@@ -68,52 +68,101 @@ function Start-Migration {
         $ValidGroups,
         $ValidMembers,
         $ValidPermissions,
-        $DestinationSite
+        $DestinationSite,
+        [switch]$DryRun
     )
     
     try {
+        if ($DryRun) {
+            Write-Host "`n╔════════════════════════════════════════════════════════╗" -ForegroundColor Magenta
+            Write-Host "║          DRY-RUN MODE - NO CHANGES WILL BE MADE        ║" -ForegroundColor Magenta
+            Write-Host "╚════════════════════════════════════════════════════════╝`n" -ForegroundColor Magenta
+        }
+
         $connected = Connect-IndicatedSite -SiteUrl $DestinationSite
-        
+
         if (-not $connected) {
             throw "Failed to connect to destination site: $DestinationSite"
         }
-        
+
         $successfulGroups = @()
         $failedGroups = @()
     
         foreach ($group in $ValidGroups) {
             # Write-Host "Title: $($group.Title) | Description: $($group.Description) | Owner: $($group.OwnerTitle)"
             try {
-                
-                # Keep the name of the newly created group
-                $newlyCreatedGroup = New-PnPGroup -Title $group.Title -Description $group.Description -Owner $group.OwnerTitle -ErrorAction Stop
-                
-                # Catch if the group creation returned null
-                if ($null -eq $newlyCreatedGroup) {
-                    throw "✗ Group creation returned null for group: $($group.Title)"
+
+                if ($DryRun) {
+                    Write-Host "[DRY-RUN] Would create group: $($group.Title)" -ForegroundColor Yellow
+                    Write-Host "  Description: $($group.Description)" -ForegroundColor DarkGray
+                    Write-Host "  Owner: $($group.OwnerTitle)" -ForegroundColor DarkGray
+                    $newlyCreatedGroup = @{ Title = $group.Title }  # Mock object for dry-run
+                } else {
+                    # Keep the name of the newly created group
+                    $newlyCreatedGroup = New-PnPGroup -Title $group.Title -Description $group.Description -Owner $group.OwnerTitle -ErrorAction Stop
+
+                    # Catch if the group creation returned null
+                    if ($null -eq $newlyCreatedGroup) {
+                        throw "✗ Group creation returned null for group: $($group.Title)"
+                    }
+
+                    Write-Host "✓ Created group: $($group.Title)" -ForegroundColor Green
+                    Start-Sleep -Seconds 1
                 }
-                
-                Write-Host "✓ Created group: $($group.Title)" -ForegroundColor Green
+
                 $successfulGroups += $group.Title
-                # Give it a second to process
-                Start-Sleep -Seconds 1
                 
                 # Begin adding the members to the newly created group
                 $memberCount = 0
                 foreach ($member in $ValidMembers) {
                     foreach ($mem in $member["Members"]) {
                         try {
-                            Add-PnPGroupMember -LoginName $mem -Group $newlyCreatedGroup -ErrorAction Stop
-                            $memberCount++
+                            if ($DryRun) {
+                                Write-Host "  [DRY-RUN] Would add member: $mem" -ForegroundColor DarkYellow
+                                $memberCount++
+                            } else {
+                                Add-PnPGroupMember -LoginName $mem -Group $newlyCreatedGroup -ErrorAction Stop
+                                $memberCount++
+                            }
                         }
                         catch {
                             Write-Host "✗ Failed to add member $mem to group $($group.Title). Error: $($_.Exception.Message)" -ForegroundColor Red
                         }
                     }
                 }
-                Write-Host "✓ Added $memberCount members to group: $($group.Title)" -ForegroundColor Cyan
-        
+
+                if ($DryRun) {
+                    Write-Host "[DRY-RUN] Would add $memberCount members to group: $($group.Title)" -ForegroundColor Yellow
+                } else {
+                    Write-Host "✓ Added $memberCount members to group: $($group.Title)" -ForegroundColor Cyan
+                }
+
                 Start-Sleep -Seconds 1
+
+                # Begin adding the permissions to the newly created group
+                $permCount = 0
+                foreach ($perm in $ValidPermissions) {
+                    foreach ($per in $perm["Permissions"]) {
+                        try {
+                            if ($DryRun) {
+                                Write-Host "  [DRY-RUN] Would add permission: $per" -ForegroundColor DarkYellow
+                                $permCount++
+                            } else {
+                                Set-PnPGroupPermissions -Identity $newlyCreatedGroup -AddRole $per -ErrorAction Stop
+                                $permCount++
+                            }
+                        }
+                        catch {
+                            Write-Host "✗ Failed to add permission $per to group $($group.Title). Error: $($_.Exception.Message)" -ForegroundColor Red
+                        }
+                    }
+                }
+
+                if ($DryRun) {
+                    Write-Host "[DRY-RUN] Would add $permCount permissions to group: $($group.Title)" -ForegroundColor Yellow
+                } else {
+                    Write-Host "✓ Added $permCount permissions to group: $($group.Title)" -ForegroundColor Cyan
+                }
             }
             catch {
                 Write-Host "✗ Failed to create group $($group.Title). Error: $($_.Exception.Message)" -ForegroundColor Red
@@ -187,6 +236,295 @@ function Get-GroupMembers {
     return $groupsMembers
 }
 
+# Scan for items with broken inheritance (lists, libraries, folders only - NO FILES)
+function Get-ItemsWithBrokenInheritance {
+    param (
+        [string]$SiteUrl
+    )
+
+    Write-Host "`n=== Scanning for broken inheritance ===" -ForegroundColor Cyan
+    Write-Host "Site: $SiteUrl" -ForegroundColor DarkCyan
+
+    $itemsWithUniquePerms = @()
+
+    try {
+        # Get all lists in the site
+        $lists = Get-PnPList | Where-Object {
+            $_.Hidden -eq $false -and
+            $_.Title -notlike "Limited Access*" -and
+            $_.Title -notlike "SharingLinks*"
+        }
+
+        Write-Host "Found $($lists.Count) lists/libraries to scan..." -ForegroundColor Yellow
+
+        foreach ($list in $lists) {
+            Write-Host "  Scanning: $($list.Title)" -ForegroundColor DarkGray
+
+            # Check if the list itself has unique permissions
+            $listItem = Get-PnPList -Identity $list.Id -Includes HasUniqueRoleAssignments
+
+            if ($listItem.HasUniqueRoleAssignments) {
+                Write-Host "    ✓ List has unique permissions" -ForegroundColor Green
+
+                $permissions = Get-PnPListItem -List $list.Id | Get-PnPProperty -Property RoleAssignments
+
+                $itemsWithUniquePerms += @{
+                    Type = "List"
+                    Title = $list.Title
+                    Url = $list.RootFolder.ServerRelativeUrl
+                    ListId = $list.Id
+                    Permissions = $permissions
+                }
+            }
+
+            # Scan folders in document libraries
+            if ($list.BaseTemplate -eq 101) {  # Document Library
+                try {
+                    $folders = Get-PnPFolderItem -FolderSiteRelativeUrl $list.RootFolder.ServerRelativeUrl -ItemType Folder
+
+                    foreach ($folder in $folders) {
+                        # Skip system folders
+                        if ($folder.Name -notin @("Forms", "_cts", "_w")) {
+                            $folderItem = Get-PnPListItem -List $list.Id -Id $folder.ListItemAllFields.Id -Includes HasUniqueRoleAssignments
+
+                            if ($folderItem.HasUniqueRoleAssignments) {
+                                Write-Host "    ✓ Folder has unique permissions: $($folder.Name)" -ForegroundColor Green
+
+                                $folderPerms = Get-PnPProperty -ClientObject $folderItem -Property RoleAssignments
+
+                                $itemsWithUniquePerms += @{
+                                    Type = "Folder"
+                                    Title = $folder.Name
+                                    Url = $folder.ServerRelativeUrl
+                                    ListId = $list.Id
+                                    ListTitle = $list.Title
+                                    Permissions = $folderPerms
+                                }
+                            }
+                        }
+                    }
+                }
+                catch {
+                    Write-Host "    Warning: Could not scan folders in $($list.Title): $($_.Exception.Message)" -ForegroundColor DarkYellow
+                }
+            }
+        }
+
+        Write-Host "`nScan complete! Found $($itemsWithUniquePerms.Count) items with unique permissions." -ForegroundColor Green
+        return $itemsWithUniquePerms
+    }
+    catch {
+        Write-Host "Error scanning for broken inheritance: $($_.Exception.Message)" -ForegroundColor Red
+        throw
+    }
+}
+
+# Apply item-level permissions to destination
+function Set-ItemLevelPermissions {
+    param (
+        $SourceItems,
+        [string]$DestinationSiteUrl,
+        [switch]$DryRun
+    )
+
+    Write-Host "`n=== Applying Item-Level Permissions ===" -ForegroundColor Cyan
+
+    $successCount = 0
+    $failCount = 0
+    $skippedCount = 0
+
+    foreach ($item in $SourceItems) {
+        try {
+            Write-Host "`nProcessing: $($item.Type) - $($item.Title)" -ForegroundColor Yellow
+            Write-Host "  URL: $($item.Url)" -ForegroundColor DarkGray
+
+            if ($DryRun) {
+                Write-Host "  [DRY-RUN] Would apply permissions to this item" -ForegroundColor Magenta
+
+                # Show what permissions would be applied
+                foreach ($perm in $item.Permissions) {
+                    $principal = Get-PnPProperty -ClientObject $perm -Property Member
+                    $roles = Get-PnPProperty -ClientObject $perm -Property RoleDefinitionBindings
+
+                    Write-Host "    [DRY-RUN] Permission: $($principal.Title) -> $($roles.Name -join ', ')" -ForegroundColor DarkYellow
+                }
+
+                $successCount++
+            } else {
+                # Get the destination item
+                if ($item.Type -eq "List") {
+                    $destList = Get-PnPList -Identity $item.ListId -ErrorAction SilentlyContinue
+
+                    if ($null -eq $destList) {
+                        Write-Host "  ✗ List not found in destination" -ForegroundColor Red
+                        $skippedCount++
+                        continue
+                    }
+
+                    # Break inheritance if needed
+                    if (-not $destList.HasUniqueRoleAssignments) {
+                        Write-Host "  → Breaking inheritance..." -ForegroundColor Cyan
+                        Set-PnPList -Identity $destList.Id -BreakRoleInheritance -CopyRoleAssignments
+                    }
+
+                    # Apply permissions
+                    foreach ($perm in $item.Permissions) {
+                        $principal = Get-PnPProperty -ClientObject $perm -Property Member
+                        $roles = Get-PnPProperty -ClientObject $perm -Property RoleDefinitionBindings
+
+                        foreach ($role in $roles) {
+                            Set-PnPListPermission -Identity $destList.Id -User $principal.LoginName -AddRole $role.Name -ErrorAction Stop
+                            Write-Host "    ✓ Applied: $($principal.Title) -> $($role.Name)" -ForegroundColor Green
+                        }
+                    }
+
+                    $successCount++
+
+                } elseif ($item.Type -eq "Folder") {
+                    # Get folder in destination
+                    $destFolder = Get-PnPFolder -Url $item.Url -ErrorAction SilentlyContinue
+
+                    if ($null -eq $destFolder) {
+                        Write-Host "  ✗ Folder not found in destination" -ForegroundColor Red
+                        $skippedCount++
+                        continue
+                    }
+
+                    # Get the list item for the folder
+                    $destFolderItem = Get-PnPListItem -List $item.ListId -Id $destFolder.ListItemAllFields.Id
+
+                    # Break inheritance if needed
+                    if (-not $destFolderItem.HasUniqueRoleAssignments) {
+                        Write-Host "  → Breaking inheritance..." -ForegroundColor Cyan
+                        Set-PnPListItemPermission -List $item.ListId -Identity $destFolderItem.Id -BreakRoleInheritance -CopyRoleAssignments
+                    }
+
+                    # Apply permissions
+                    foreach ($perm in $item.Permissions) {
+                        $principal = Get-PnPProperty -ClientObject $perm -Property Member
+                        $roles = Get-PnPProperty -ClientObject $perm -Property RoleDefinitionBindings
+
+                        foreach ($role in $roles) {
+                            Set-PnPListItemPermission -List $item.ListId -Identity $destFolderItem.Id -User $principal.LoginName -AddRole $role.Name -ErrorAction Stop
+                            Write-Host "    ✓ Applied: $($principal.Title) -> $($role.Name)" -ForegroundColor Green
+                        }
+                    }
+
+                    $successCount++
+                }
+            }
+        }
+        catch {
+            Write-Host "  ✗ Failed to apply permissions: $($_.Exception.Message)" -ForegroundColor Red
+            $failCount++
+        }
+    }
+
+    Write-Host "`n=== Item-Level Permissions Summary ===" -ForegroundColor Cyan
+    Write-Host "Successful: $successCount" -ForegroundColor Green
+    Write-Host "Failed: $failCount" -ForegroundColor Red
+    Write-Host "Skipped: $skippedCount" -ForegroundColor Yellow
+
+    return @{
+        Success = $successCount
+        Failed = $failCount
+        Skipped = $skippedCount
+    }
+}
+
+# Export all permissions to CSV for audit trail
+function Export-PermissionsToCSV {
+    param (
+        [string]$SiteUrl,
+        [string]$SiteName,
+        [string]$OutputPath = "C:\Users\E095713\Downloads\SiteCollection-Reports\"
+    )
+
+    Write-Host "`n=== Exporting Permissions to CSV ===" -ForegroundColor Cyan
+    Write-Host "Site: $SiteUrl" -ForegroundColor DarkCyan
+
+    $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    $safeSiteName = $SiteName -replace '[\\/:*?"<>|]', '_'
+    $exportFileName = "$OutputPath\Permissions-$safeSiteName-$timestamp.csv"
+
+    $allPermissions = @()
+
+    try {
+        # Export site-level group permissions
+        Write-Host "Exporting site-level group permissions..." -ForegroundColor Yellow
+
+        $groups = Get-PnPGroup | Where-Object {
+            ($_.Title -notlike "Limited Access System Group*") -and
+            ($_.Title -notlike "SharingLinks*")
+        }
+
+        foreach ($group in $groups) {
+            try {
+                # Get group permissions
+                $groupPerms = Get-PnPGroupPermissions -Identity $group.Title -ErrorAction SilentlyContinue
+
+                if ($null -ne $groupPerms) {
+                    foreach ($perm in $groupPerms) {
+                        $allPermissions += [PSCustomObject]@{
+                            Type = "Site-Level Group"
+                            ItemURL = $SiteUrl
+                            GroupGUID = $group.Id
+                            GroupName = $group.Title
+                            PermissionLevel = $perm.Name
+                            Owner = $group.OwnerTitle
+                            Description = $group.Description
+                        }
+                    }
+                }
+            }
+            catch {
+                Write-Host "  Warning: Could not export permissions for group $($group.Title)" -ForegroundColor DarkYellow
+            }
+        }
+
+        # Export item-level permissions (broken inheritance)
+        Write-Host "Exporting item-level permissions..." -ForegroundColor Yellow
+
+        $itemsWithUniquePerms = Get-ItemsWithBrokenInheritance -SiteUrl $SiteUrl
+
+        foreach ($item in $itemsWithUniquePerms) {
+            foreach ($perm in $item.Permissions) {
+                try {
+                    $principal = Get-PnPProperty -ClientObject $perm -Property Member
+                    $roles = Get-PnPProperty -ClientObject $perm -Property RoleDefinitionBindings
+
+                    foreach ($role in $roles) {
+                        $allPermissions += [PSCustomObject]@{
+                            Type = "$($item.Type) - Broken Inheritance"
+                            ItemURL = $SiteUrl + $item.Url
+                            GroupGUID = if ($principal.Id) { $principal.Id } else { "N/A" }
+                            GroupName = $principal.Title
+                            PermissionLevel = $role.Name
+                            Owner = "N/A"
+                            Description = "Item: $($item.Title)"
+                        }
+                    }
+                }
+                catch {
+                    Write-Host "  Warning: Could not export permission for item $($item.Title)" -ForegroundColor DarkYellow
+                }
+            }
+        }
+
+        # Export to CSV
+        $allPermissions | Export-Csv -Path $exportFileName -NoTypeInformation -Encoding UTF8
+
+        Write-Host "`n✓ Exported $($allPermissions.Count) permission entries" -ForegroundColor Green
+        Write-Host "✓ File saved to: $exportFileName" -ForegroundColor Green
+
+        return $exportFileName
+    }
+    catch {
+        Write-Host "Error exporting permissions: $($_.Exception.Message)" -ForegroundColor Red
+        return $null
+    }
+}
+
 # Get the permissions of the requested group
 
 function Get-GroupsPermissions {
@@ -245,7 +583,8 @@ function New-GroupInDestination {
     param (
         $DestinationSiteName,
         $GroupsToCreate,
-        $PassthroughSourceName
+        $PassthroughSourceName,
+        [switch]$DryRun
     )
     
     # Connect to destination site
@@ -316,9 +655,13 @@ function New-GroupInDestination {
     $filteredMembers = $groupsMembers | Where-Object { $_.Title -in $validGroupTitles }
     
     Write-Host "Ready to migrate with $($validGroupTitles.Count). Trust in the Omnisiah. "
-    
+
     # Send everything to start the copying
-    Start-Migration -ValidGroups $filteredGroups -ValidMembers $filteredMembers -ValidPermissions $groupsPermissions -DestinationSite $DestinationSiteName
+    if ($DryRun) {
+        Start-Migration -ValidGroups $filteredGroups -ValidMembers $filteredMembers -ValidPermissions $groupsPermissions -DestinationSite $DestinationSiteName -DryRun
+    } else {
+        Start-Migration -ValidGroups $filteredGroups -ValidMembers $filteredMembers -ValidPermissions $groupsPermissions -DestinationSite $DestinationSiteName
+    }
 }
 
 # Function to determine which groups are already in destination and which ones aren't
@@ -355,13 +698,14 @@ function Copy-SourceGroupsToDestination {
     
 }
 
-<# 
+<#
     Function to acquire the permission groups of the chosen sites, both SOURCE and DESTINATION
 #>
 function Search-RequestedSites {
     param (
         [string]$SourceSiteName,
-        [string]$DestinationSiteName
+        [string]$DestinationSiteName,
+        [switch]$DryRun
     )
     $sourceSearched = $false
     $destinationSearched = $false
@@ -401,14 +745,84 @@ function Search-RequestedSites {
         }
         elseif ($groupsToMigrate.Count -ge 1) {
             Write-Host "There are $($groupsToMigrate.Count) groups to migrate. This might take a while..." -ForegroundColor DarkCyan
-            
-            New-GroupInDestination -DestinationSiteName $DestinationSiteName -GroupsToCreate $groupsToMigrate -PassthroughSourceName $SourceSiteName
+
+            if ($DryRun) {
+                New-GroupInDestination -DestinationSiteName $DestinationSiteName -GroupsToCreate $groupsToMigrate -PassthroughSourceName $SourceSiteName -DryRun
+            } else {
+                New-GroupInDestination -DestinationSiteName $DestinationSiteName -GroupsToCreate $groupsToMigrate -PassthroughSourceName $SourceSiteName
+            }
         }
+
+        # Now scan for item-level permissions (broken inheritance)
+        Write-Host "`n`n════════════════════════════════════════════════════════" -ForegroundColor Cyan
+        Write-Host "ITEM-LEVEL PERMISSIONS (Broken Inheritance)" -ForegroundColor Cyan
+        Write-Host "════════════════════════════════════════════════════════`n" -ForegroundColor Cyan
+
+        $scanItemPerms = Read-Host "Do you want to scan for items with broken inheritance? (Y/N)"
+
+        if ($scanItemPerms.ToLower() -eq "y") {
+            # Scan source site
+            Write-Host "`nScanning SOURCE site for broken inheritance..." -ForegroundColor Yellow
+            Connect-IndicatedSite -SiteUrl $SourceSiteName
+            $sourceItemsWithUniquePerms = Get-ItemsWithBrokenInheritance -SiteUrl $SourceSiteName
+
+            if ($sourceItemsWithUniquePerms.Count -gt 0) {
+                Write-Host "`nFound $($sourceItemsWithUniquePerms.Count) items with unique permissions in SOURCE." -ForegroundColor Yellow
+
+                $applyPerms = Read-Host "Do you want to apply these permissions to DESTINATION? (Y/N)"
+
+                if ($applyPerms.ToLower() -eq "y") {
+                    # Connect to destination and apply permissions
+                    Connect-IndicatedSite -SiteUrl $DestinationSiteName
+
+                    if ($DryRun) {
+                        Set-ItemLevelPermissions -SourceItems $sourceItemsWithUniquePerms -DestinationSiteUrl $DestinationSiteName -DryRun
+                    } else {
+                        Set-ItemLevelPermissions -SourceItems $sourceItemsWithUniquePerms -DestinationSiteUrl $DestinationSiteName
+                    }
+                } else {
+                    Write-Host "Skipping item-level permissions migration." -ForegroundColor Yellow
+                }
+            } else {
+                Write-Host "No items with broken inheritance found in SOURCE site." -ForegroundColor Green
+            }
+        } else {
+            Write-Host "Skipping broken inheritance scan." -ForegroundColor Yellow
+        }
+
+        # Export permissions for audit trail
+        Write-Host "`n`n════════════════════════════════════════════════════════" -ForegroundColor Cyan
+        Write-Host "PERMISSIONS EXPORT (Audit Trail)" -ForegroundColor Cyan
+        Write-Host "════════════════════════════════════════════════════════`n" -ForegroundColor Cyan
+
+        $exportPerms = Read-Host "Do you want to export permissions to CSV for audit trail? (Y/N)"
+
+        if ($exportPerms.ToLower() -eq "y") {
+            # Export SOURCE permissions
+            Write-Host "`nExporting SOURCE site permissions..." -ForegroundColor Yellow
+            Connect-IndicatedSite -SiteUrl $SourceSiteName
+            $sourceExportFile = Export-PermissionsToCSV -SiteUrl $SourceSiteName -SiteName "SOURCE"
+
+            # Export DESTINATION permissions
+            Write-Host "`nExporting DESTINATION site permissions..." -ForegroundColor Yellow
+            Connect-IndicatedSite -SiteUrl $DestinationSiteName
+            $destExportFile = Export-PermissionsToCSV -SiteUrl $DestinationSiteName -SiteName "DESTINATION"
+
+            Write-Host "`n✓ Audit trail complete!" -ForegroundColor Green
+            Write-Host "  SOURCE:      $sourceExportFile" -ForegroundColor Cyan
+            Write-Host "  DESTINATION: $destExportFile" -ForegroundColor Cyan
+        } else {
+            Write-Host "Skipping permissions export." -ForegroundColor Yellow
+        }
+
+        Write-Host "`n`n╔════════════════════════════════════════════════════════╗" -ForegroundColor Green
+        Write-Host "║          MIGRATION COMPLETE!                           ║" -ForegroundColor Green
+        Write-Host "╚════════════════════════════════════════════════════════╝`n" -ForegroundColor Green
     }
     else {
         Write-Host "Groups could not be acquired from either of the sites. Terminating..." -ForegroundColor Red
         exit
-    }   
+    }
 }
 
 # Search for the SOURCE site that the user wants
@@ -646,7 +1060,19 @@ do {
             exit
         }
         Write-Host "Starting Migration-Man..." -ForegroundColor Green
-        Start-Sleep -Seconds 1        
+        Start-Sleep -Seconds 1
+
+        # Ask user if they want to run in dry-run mode
+        Write-Host "`nDo you want to run in DRY-RUN mode? (Preview changes without making them)" -ForegroundColor Cyan
+        Write-Host "[Y] Yes (Dry-Run) | [N] No (Live Migration)" -ForegroundColor Cyan
+        $dryRunChoice = Read-Host "Your choice"
+        $useDryRun = $dryRunChoice.ToLower() -eq "y"
+
+        if ($useDryRun) {
+            Write-Host "`n*** DRY-RUN MODE ENABLED - No changes will be made ***`n" -ForegroundColor Magenta
+        } else {
+            Write-Host "`n*** LIVE MIGRATION MODE - Changes will be applied ***`n" -ForegroundColor Green
+        }
 
         # Get the latest created CSV file. Since these are supposed to run every Wednesday, the one chosen will always be the most up to date. The resulting file name will have the full path (FullName)
         $latestFile = Get-ChildItem -Path "C:\Users\E095713\Downloads\SiteCollection-Reports\" -Attributes !D *.* | Sort-Object -Descending -Property CreationTime | Select-Object -First 1 -ExpandProperty FullName
@@ -659,7 +1085,11 @@ do {
         $resultOfSearchingForDestinationSite = Get-SearchedDestinationSite -CSVFileOfSites $latestFile
 
         # Send both site names to the function for getting their permission groups
-        Search-RequestedSites -SourceSiteName $resultOfSearchingForSourceSite -DestinationSiteName $resultOfSearchingForDestinationSite
+        if ($useDryRun) {
+            Search-RequestedSites -SourceSiteName $resultOfSearchingForSourceSite -DestinationSiteName $resultOfSearchingForDestinationSite -DryRun
+        } else {
+            Search-RequestedSites -SourceSiteName $resultOfSearchingForSourceSite -DestinationSiteName $resultOfSearchingForDestinationSite
+        }
     }
     catch {
         Write-Host "Critical error: "$_.Exception.Message -ForegroundColor Red
