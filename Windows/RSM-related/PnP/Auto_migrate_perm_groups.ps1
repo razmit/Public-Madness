@@ -432,6 +432,99 @@ function Set-ItemLevelPermissions {
     }
 }
 
+# Export all permissions to CSV for audit trail
+function Export-PermissionsToCSV {
+    param (
+        [string]$SiteUrl,
+        [string]$SiteName,
+        [string]$OutputPath = "C:\Users\E095713\Downloads\SiteCollection-Reports\"
+    )
+
+    Write-Host "`n=== Exporting Permissions to CSV ===" -ForegroundColor Cyan
+    Write-Host "Site: $SiteUrl" -ForegroundColor DarkCyan
+
+    $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    $safeSiteName = $SiteName -replace '[\\/:*?"<>|]', '_'
+    $exportFileName = "$OutputPath\Permissions-$safeSiteName-$timestamp.csv"
+
+    $allPermissions = @()
+
+    try {
+        # Export site-level group permissions
+        Write-Host "Exporting site-level group permissions..." -ForegroundColor Yellow
+
+        $groups = Get-PnPGroup | Where-Object {
+            ($_.Title -notlike "Limited Access System Group*") -and
+            ($_.Title -notlike "SharingLinks*")
+        }
+
+        foreach ($group in $groups) {
+            try {
+                # Get group permissions
+                $groupPerms = Get-PnPGroupPermissions -Identity $group.Title -ErrorAction SilentlyContinue
+
+                if ($null -ne $groupPerms) {
+                    foreach ($perm in $groupPerms) {
+                        $allPermissions += [PSCustomObject]@{
+                            Type = "Site-Level Group"
+                            ItemURL = $SiteUrl
+                            GroupGUID = $group.Id
+                            GroupName = $group.Title
+                            PermissionLevel = $perm.Name
+                            Owner = $group.OwnerTitle
+                            Description = $group.Description
+                        }
+                    }
+                }
+            }
+            catch {
+                Write-Host "  Warning: Could not export permissions for group $($group.Title)" -ForegroundColor DarkYellow
+            }
+        }
+
+        # Export item-level permissions (broken inheritance)
+        Write-Host "Exporting item-level permissions..." -ForegroundColor Yellow
+
+        $itemsWithUniquePerms = Get-ItemsWithBrokenInheritance -SiteUrl $SiteUrl
+
+        foreach ($item in $itemsWithUniquePerms) {
+            foreach ($perm in $item.Permissions) {
+                try {
+                    $principal = Get-PnPProperty -ClientObject $perm -Property Member
+                    $roles = Get-PnPProperty -ClientObject $perm -Property RoleDefinitionBindings
+
+                    foreach ($role in $roles) {
+                        $allPermissions += [PSCustomObject]@{
+                            Type = "$($item.Type) - Broken Inheritance"
+                            ItemURL = $SiteUrl + $item.Url
+                            GroupGUID = if ($principal.Id) { $principal.Id } else { "N/A" }
+                            GroupName = $principal.Title
+                            PermissionLevel = $role.Name
+                            Owner = "N/A"
+                            Description = "Item: $($item.Title)"
+                        }
+                    }
+                }
+                catch {
+                    Write-Host "  Warning: Could not export permission for item $($item.Title)" -ForegroundColor DarkYellow
+                }
+            }
+        }
+
+        # Export to CSV
+        $allPermissions | Export-Csv -Path $exportFileName -NoTypeInformation -Encoding UTF8
+
+        Write-Host "`n✓ Exported $($allPermissions.Count) permission entries" -ForegroundColor Green
+        Write-Host "✓ File saved to: $exportFileName" -ForegroundColor Green
+
+        return $exportFileName
+    }
+    catch {
+        Write-Host "Error exporting permissions: $($_.Exception.Message)" -ForegroundColor Red
+        return $null
+    }
+}
+
 # Get the permissions of the requested group
 
 function Get-GroupsPermissions {
@@ -696,6 +789,35 @@ function Search-RequestedSites {
         } else {
             Write-Host "Skipping broken inheritance scan." -ForegroundColor Yellow
         }
+
+        # Export permissions for audit trail
+        Write-Host "`n`n════════════════════════════════════════════════════════" -ForegroundColor Cyan
+        Write-Host "PERMISSIONS EXPORT (Audit Trail)" -ForegroundColor Cyan
+        Write-Host "════════════════════════════════════════════════════════`n" -ForegroundColor Cyan
+
+        $exportPerms = Read-Host "Do you want to export permissions to CSV for audit trail? (Y/N)"
+
+        if ($exportPerms.ToLower() -eq "y") {
+            # Export SOURCE permissions
+            Write-Host "`nExporting SOURCE site permissions..." -ForegroundColor Yellow
+            Connect-IndicatedSite -SiteUrl $SourceSiteName
+            $sourceExportFile = Export-PermissionsToCSV -SiteUrl $SourceSiteName -SiteName "SOURCE"
+
+            # Export DESTINATION permissions
+            Write-Host "`nExporting DESTINATION site permissions..." -ForegroundColor Yellow
+            Connect-IndicatedSite -SiteUrl $DestinationSiteName
+            $destExportFile = Export-PermissionsToCSV -SiteUrl $DestinationSiteName -SiteName "DESTINATION"
+
+            Write-Host "`n✓ Audit trail complete!" -ForegroundColor Green
+            Write-Host "  SOURCE:      $sourceExportFile" -ForegroundColor Cyan
+            Write-Host "  DESTINATION: $destExportFile" -ForegroundColor Cyan
+        } else {
+            Write-Host "Skipping permissions export." -ForegroundColor Yellow
+        }
+
+        Write-Host "`n`n╔════════════════════════════════════════════════════════╗" -ForegroundColor Green
+        Write-Host "║          MIGRATION COMPLETE!                           ║" -ForegroundColor Green
+        Write-Host "╚════════════════════════════════════════════════════════╝`n" -ForegroundColor Green
     }
     else {
         Write-Host "Groups could not be acquired from either of the sites. Terminating..." -ForegroundColor Red
