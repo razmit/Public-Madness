@@ -4,7 +4,7 @@ function Connect-IndicatedSite {
         [string]$SiteUrl
     )
     
-    $failCounter = 0
+    $failCounter = 1
     $maxRetries = 3
     $connected = $false
     
@@ -26,7 +26,7 @@ function Connect-IndicatedSite {
                 Start-Sleep -Seconds 2
             }
         }   
-    } while ($failCounter -le $maxRetries -and -not $connected) #Don't exit until all attempts were used and it's NOT connected | $connected = $false
+    } while ($failCounter -eq $maxRetries -and -not $connected) #Don't exit until all attempts were used and it's NOT connected | $connected = $false
     
     if (-not $connected) {
         Write-Host "All connection attempts failed. Unable to connect to $SiteUrl" -ForegroundColor Red
@@ -103,6 +103,7 @@ function Start-Migration {
                     foreach ($mem in $member["Members"]) {
                         try {
                             Add-PnPGroupMember -LoginName $mem -Group $newlyCreatedGroup -ErrorAction Stop
+                            $successfulGroups += $group.Title
                             $memberCount++
                         }
                         catch {
@@ -113,22 +114,6 @@ function Start-Migration {
                 Write-Host "✓ Added $memberCount members to group: $($group.Title)" -ForegroundColor Cyan
         
                 Start-Sleep -Seconds 1
-                
-                # Begin adding the permissions to the newly created group
-                
-                $permCount = 0
-                foreach ($perm in $ValidPermissions) {
-                    foreach ($per in $perm["Permissions"]) {
-                        try {
-                            Set-PnPGroupPermissions -Identity $newlyCreatedGroup -AddRole $per -ErrorAction Stop
-                            $permCount++
-                        }
-                        catch {
-                            Write-Host "✗ Failed to add permission $per to group $($group.Title). Error: $($_.Exception.Message)" -ForegroundColor Red
-                        }
-                    }
-                }
-                Write-Host "✓ Added $permCount permissions to group: $($group.Title)" -ForegroundColor Cyan
             }
             catch {
                 Write-Host "✗ Failed to create group $($group.Title). Error: $($_.Exception.Message)" -ForegroundColor Red
@@ -149,14 +134,12 @@ function Start-Migration {
             Write-Host "`nFailed Groups:" -ForegroundColor Yellow
             $failedGroups | ForEach-Object { Write-Host "  - $($_.GroupTitle): $($_.Error)" }
         }
+        Start-Sleep -Seconds 2
         
         return @{
             Success = $successfulGroups
             Failed = $failedGroups
         }
-    
-        # Write-Host "Groups created successfully!"
-        Start-Sleep -Seconds 2
     }
     catch {
         Write-Host "Critical error in Start-Migration: "$_.Exception.Message -ForegroundColor Red
@@ -180,7 +163,7 @@ function Get-GroupMembers {
     
     if ($null -eq $GroupNames) {
         Write-Host "No groups to get members from. Exiting function." -ForegroundColor Yellow
-        return
+        throw
     }
     
     foreach ($group in $GroupNames) {
@@ -199,7 +182,6 @@ function Get-GroupMembers {
         }
         catch {
             Write-Host "Failed to get members for group: $($group["Title"]). Error: $($_.Exception.Message)" -ForegroundColor Red
-            throw
         }
     }
     return $groupsMembers
@@ -246,6 +228,7 @@ function Get-GroupsPermissions {
         }
         catch {
             write-Host "Get-GroupPermissions: Failed to get permissions for group: $($group["Title"]). Error: $($_.Exception.Message)" -ForegroundColor Red
+            $failedGroupPermsAcquired += $group["Title"]
         }
     }
     
@@ -400,17 +383,13 @@ function Search-RequestedSites {
                     $destinationGroups = Get-PNPGroup | Where-Object { ($_.Title -notlike "Limited Access System Group*") -and ($_.Title -notlike "SharingLinks*") } | Sort-Object -Property Id
                     $destinationSearched = $true
                 } 
-    
-                foreach ($group in $siteGroups) {
-                    Write-Host "Group: "$group.LoginName
-                }
             }
             catch {
                 Write-Host "A connection to the site could not be completed. Error: "$_.Exception.Message -ForegroundColor Red
             }
         }
         
-    } while (-not $sourceSearched -and -not $destinationSearched)
+    } while (-not ($sourceSearched -and $destinationSearched))
     
     if (($sourceSearched -and $destinationSearched) -and ($null -ne $sourceGroups -and $null -ne $destinationGroups)) {
         Write-Host "Groups and permissions acquired for both sites. Moving to migration..." -ForegroundColor Yellow
@@ -449,8 +428,13 @@ function Get-SearchedSourceSite {
                 $isValid = Test-UserInput -UserInput $sourceSiteToSearch
             } while (-not $isValid)
             
-            # Import the recently created CSV file of all of the site collections to search for the one that the user wrote, even if it's a partial name
-            $foundSourceSite = Import-Csv -Path $CSVFileOfSites | Where-Object { $_.Url -like "*$sourceSiteToSearch*" } | Select-Object Status, Url
+            try {
+                # Import the recently created CSV file of all of the site collections to search for the one that the user wrote, even if it's a partial name
+                $foundSourceSite = Import-Csv -Path $CSVFileOfSites | Where-Object { $_.Url -like "*$sourceSiteToSearch*" } | Select-Object Status, Url -ErrorAction Stop
+            }
+            catch {
+                write-Host "Error importing CSV: $($_.Exception.Message)" -ForegroundColor Red
+            }
 
             # Store the chosen site
             $chosenSourceSite
@@ -514,9 +498,14 @@ function Get-SearchedDestinationSite {
                 $isValid = Test-UserInput -UserInput $destinationSiteToSearch
             } while (-not $isValid)
             
-            # Import the recently created CSV file of all of the site collections to search for the one that the user wrote, even if it's a partial name
-            $foundDestinationSite = Import-Csv -Path $CSVFileOfSites | Where-Object { $_.Url -like "*$destinationSiteToSearch*" } | Select-Object Status, Url
-
+            try {
+                # Import the recently created CSV file of all of the site collections to search for the one that the user wrote, even if it's a partial name
+                $foundDestinationSite = Import-Csv -Path $CSVFileOfSites | Where-Object { $_.Url -like "*$destinationSiteToSearch*" } | Select-Object Status, Url -ErrorAction Stop
+            }
+            catch {
+                Write-Host "Error importing CSV: $($_.Exception.Message)" -ForegroundColor Red
+            }
+            
             # Store the chosen site
             $chosenDestinationSite
 
