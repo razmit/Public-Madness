@@ -68,52 +68,101 @@ function Start-Migration {
         $ValidGroups,
         $ValidMembers,
         $ValidPermissions,
-        $DestinationSite
+        $DestinationSite,
+        [switch]$DryRun
     )
     
     try {
+        if ($DryRun) {
+            Write-Host "`n╔════════════════════════════════════════════════════════╗" -ForegroundColor Magenta
+            Write-Host "║          DRY-RUN MODE - NO CHANGES WILL BE MADE        ║" -ForegroundColor Magenta
+            Write-Host "╚════════════════════════════════════════════════════════╝`n" -ForegroundColor Magenta
+        }
+
         $connected = Connect-IndicatedSite -SiteUrl $DestinationSite
-        
+
         if (-not $connected) {
             throw "Failed to connect to destination site: $DestinationSite"
         }
-        
+
         $successfulGroups = @()
         $failedGroups = @()
     
         foreach ($group in $ValidGroups) {
             # Write-Host "Title: $($group.Title) | Description: $($group.Description) | Owner: $($group.OwnerTitle)"
             try {
-                
-                # Keep the name of the newly created group
-                $newlyCreatedGroup = New-PnPGroup -Title $group.Title -Description $group.Description -Owner $group.OwnerTitle -ErrorAction Stop
-                
-                # Catch if the group creation returned null
-                if ($null -eq $newlyCreatedGroup) {
-                    throw "✗ Group creation returned null for group: $($group.Title)"
+
+                if ($DryRun) {
+                    Write-Host "[DRY-RUN] Would create group: $($group.Title)" -ForegroundColor Yellow
+                    Write-Host "  Description: $($group.Description)" -ForegroundColor DarkGray
+                    Write-Host "  Owner: $($group.OwnerTitle)" -ForegroundColor DarkGray
+                    $newlyCreatedGroup = @{ Title = $group.Title }  # Mock object for dry-run
+                } else {
+                    # Keep the name of the newly created group
+                    $newlyCreatedGroup = New-PnPGroup -Title $group.Title -Description $group.Description -Owner $group.OwnerTitle -ErrorAction Stop
+
+                    # Catch if the group creation returned null
+                    if ($null -eq $newlyCreatedGroup) {
+                        throw "✗ Group creation returned null for group: $($group.Title)"
+                    }
+
+                    Write-Host "✓ Created group: $($group.Title)" -ForegroundColor Green
+                    Start-Sleep -Seconds 1
                 }
-                
-                Write-Host "✓ Created group: $($group.Title)" -ForegroundColor Green
+
                 $successfulGroups += $group.Title
-                # Give it a second to process
-                Start-Sleep -Seconds 1
                 
                 # Begin adding the members to the newly created group
                 $memberCount = 0
                 foreach ($member in $ValidMembers) {
                     foreach ($mem in $member["Members"]) {
                         try {
-                            Add-PnPGroupMember -LoginName $mem -Group $newlyCreatedGroup -ErrorAction Stop
-                            $memberCount++
+                            if ($DryRun) {
+                                Write-Host "  [DRY-RUN] Would add member: $mem" -ForegroundColor DarkYellow
+                                $memberCount++
+                            } else {
+                                Add-PnPGroupMember -LoginName $mem -Group $newlyCreatedGroup -ErrorAction Stop
+                                $memberCount++
+                            }
                         }
                         catch {
                             Write-Host "✗ Failed to add member $mem to group $($group.Title). Error: $($_.Exception.Message)" -ForegroundColor Red
                         }
                     }
                 }
-                Write-Host "✓ Added $memberCount members to group: $($group.Title)" -ForegroundColor Cyan
-        
+
+                if ($DryRun) {
+                    Write-Host "[DRY-RUN] Would add $memberCount members to group: $($group.Title)" -ForegroundColor Yellow
+                } else {
+                    Write-Host "✓ Added $memberCount members to group: $($group.Title)" -ForegroundColor Cyan
+                }
+
                 Start-Sleep -Seconds 1
+
+                # Begin adding the permissions to the newly created group
+                $permCount = 0
+                foreach ($perm in $ValidPermissions) {
+                    foreach ($per in $perm["Permissions"]) {
+                        try {
+                            if ($DryRun) {
+                                Write-Host "  [DRY-RUN] Would add permission: $per" -ForegroundColor DarkYellow
+                                $permCount++
+                            } else {
+                                Set-PnPGroupPermissions -Identity $newlyCreatedGroup -AddRole $per -ErrorAction Stop
+                                $permCount++
+                            }
+                        }
+                        catch {
+                            Write-Host "✗ Failed to add permission $per to group $($group.Title). Error: $($_.Exception.Message)" -ForegroundColor Red
+                        }
+                    }
+                }
+
+                if ($DryRun) {
+                    Write-Host "[DRY-RUN] Would add $permCount permissions to group: $($group.Title)" -ForegroundColor Yellow
+                } else {
+                    Write-Host "✓ Added $permCount permissions to group: $($group.Title)" -ForegroundColor Cyan
+                }
             }
             catch {
                 Write-Host "✗ Failed to create group $($group.Title). Error: $($_.Exception.Message)" -ForegroundColor Red
@@ -245,7 +294,8 @@ function New-GroupInDestination {
     param (
         $DestinationSiteName,
         $GroupsToCreate,
-        $PassthroughSourceName
+        $PassthroughSourceName,
+        [switch]$DryRun
     )
     
     # Connect to destination site
@@ -316,9 +366,13 @@ function New-GroupInDestination {
     $filteredMembers = $groupsMembers | Where-Object { $_.Title -in $validGroupTitles }
     
     Write-Host "Ready to migrate with $($validGroupTitles.Count). Trust in the Omnisiah. "
-    
+
     # Send everything to start the copying
-    Start-Migration -ValidGroups $filteredGroups -ValidMembers $filteredMembers -ValidPermissions $groupsPermissions -DestinationSite $DestinationSiteName
+    if ($DryRun) {
+        Start-Migration -ValidGroups $filteredGroups -ValidMembers $filteredMembers -ValidPermissions $groupsPermissions -DestinationSite $DestinationSiteName -DryRun
+    } else {
+        Start-Migration -ValidGroups $filteredGroups -ValidMembers $filteredMembers -ValidPermissions $groupsPermissions -DestinationSite $DestinationSiteName
+    }
 }
 
 # Function to determine which groups are already in destination and which ones aren't
@@ -355,13 +409,14 @@ function Copy-SourceGroupsToDestination {
     
 }
 
-<# 
+<#
     Function to acquire the permission groups of the chosen sites, both SOURCE and DESTINATION
 #>
 function Search-RequestedSites {
     param (
         [string]$SourceSiteName,
-        [string]$DestinationSiteName
+        [string]$DestinationSiteName,
+        [switch]$DryRun
     )
     $sourceSearched = $false
     $destinationSearched = $false
@@ -401,8 +456,12 @@ function Search-RequestedSites {
         }
         elseif ($groupsToMigrate.Count -ge 1) {
             Write-Host "There are $($groupsToMigrate.Count) groups to migrate. This might take a while..." -ForegroundColor DarkCyan
-            
-            New-GroupInDestination -DestinationSiteName $DestinationSiteName -GroupsToCreate $groupsToMigrate -PassthroughSourceName $SourceSiteName
+
+            if ($DryRun) {
+                New-GroupInDestination -DestinationSiteName $DestinationSiteName -GroupsToCreate $groupsToMigrate -PassthroughSourceName $SourceSiteName -DryRun
+            } else {
+                New-GroupInDestination -DestinationSiteName $DestinationSiteName -GroupsToCreate $groupsToMigrate -PassthroughSourceName $SourceSiteName
+            }
         }
     }
     else {
@@ -646,7 +705,19 @@ do {
             exit
         }
         Write-Host "Starting Migration-Man..." -ForegroundColor Green
-        Start-Sleep -Seconds 1        
+        Start-Sleep -Seconds 1
+
+        # Ask user if they want to run in dry-run mode
+        Write-Host "`nDo you want to run in DRY-RUN mode? (Preview changes without making them)" -ForegroundColor Cyan
+        Write-Host "[Y] Yes (Dry-Run) | [N] No (Live Migration)" -ForegroundColor Cyan
+        $dryRunChoice = Read-Host "Your choice"
+        $useDryRun = $dryRunChoice.ToLower() -eq "y"
+
+        if ($useDryRun) {
+            Write-Host "`n*** DRY-RUN MODE ENABLED - No changes will be made ***`n" -ForegroundColor Magenta
+        } else {
+            Write-Host "`n*** LIVE MIGRATION MODE - Changes will be applied ***`n" -ForegroundColor Green
+        }
 
         # Get the latest created CSV file. Since these are supposed to run every Wednesday, the one chosen will always be the most up to date. The resulting file name will have the full path (FullName)
         $latestFile = Get-ChildItem -Path "C:\Users\E095713\Downloads\SiteCollection-Reports\" -Attributes !D *.* | Sort-Object -Descending -Property CreationTime | Select-Object -First 1 -ExpandProperty FullName
@@ -659,7 +730,11 @@ do {
         $resultOfSearchingForDestinationSite = Get-SearchedDestinationSite -CSVFileOfSites $latestFile
 
         # Send both site names to the function for getting their permission groups
-        Search-RequestedSites -SourceSiteName $resultOfSearchingForSourceSite -DestinationSiteName $resultOfSearchingForDestinationSite
+        if ($useDryRun) {
+            Search-RequestedSites -SourceSiteName $resultOfSearchingForSourceSite -DestinationSiteName $resultOfSearchingForDestinationSite -DryRun
+        } else {
+            Search-RequestedSites -SourceSiteName $resultOfSearchingForSourceSite -DestinationSiteName $resultOfSearchingForDestinationSite
+        }
     }
     catch {
         Write-Host "Critical error: "$_.Exception.Message -ForegroundColor Red
