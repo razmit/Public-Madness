@@ -236,6 +236,202 @@ function Get-GroupMembers {
     return $groupsMembers
 }
 
+# Scan for items with broken inheritance (lists, libraries, folders only - NO FILES)
+function Get-ItemsWithBrokenInheritance {
+    param (
+        [string]$SiteUrl
+    )
+
+    Write-Host "`n=== Scanning for broken inheritance ===" -ForegroundColor Cyan
+    Write-Host "Site: $SiteUrl" -ForegroundColor DarkCyan
+
+    $itemsWithUniquePerms = @()
+
+    try {
+        # Get all lists in the site
+        $lists = Get-PnPList | Where-Object {
+            $_.Hidden -eq $false -and
+            $_.Title -notlike "Limited Access*" -and
+            $_.Title -notlike "SharingLinks*"
+        }
+
+        Write-Host "Found $($lists.Count) lists/libraries to scan..." -ForegroundColor Yellow
+
+        foreach ($list in $lists) {
+            Write-Host "  Scanning: $($list.Title)" -ForegroundColor DarkGray
+
+            # Check if the list itself has unique permissions
+            $listItem = Get-PnPList -Identity $list.Id -Includes HasUniqueRoleAssignments
+
+            if ($listItem.HasUniqueRoleAssignments) {
+                Write-Host "    ✓ List has unique permissions" -ForegroundColor Green
+
+                $permissions = Get-PnPListItem -List $list.Id | Get-PnPProperty -Property RoleAssignments
+
+                $itemsWithUniquePerms += @{
+                    Type = "List"
+                    Title = $list.Title
+                    Url = $list.RootFolder.ServerRelativeUrl
+                    ListId = $list.Id
+                    Permissions = $permissions
+                }
+            }
+
+            # Scan folders in document libraries
+            if ($list.BaseTemplate -eq 101) {  # Document Library
+                try {
+                    $folders = Get-PnPFolderItem -FolderSiteRelativeUrl $list.RootFolder.ServerRelativeUrl -ItemType Folder
+
+                    foreach ($folder in $folders) {
+                        # Skip system folders
+                        if ($folder.Name -notin @("Forms", "_cts", "_w")) {
+                            $folderItem = Get-PnPListItem -List $list.Id -Id $folder.ListItemAllFields.Id -Includes HasUniqueRoleAssignments
+
+                            if ($folderItem.HasUniqueRoleAssignments) {
+                                Write-Host "    ✓ Folder has unique permissions: $($folder.Name)" -ForegroundColor Green
+
+                                $folderPerms = Get-PnPProperty -ClientObject $folderItem -Property RoleAssignments
+
+                                $itemsWithUniquePerms += @{
+                                    Type = "Folder"
+                                    Title = $folder.Name
+                                    Url = $folder.ServerRelativeUrl
+                                    ListId = $list.Id
+                                    ListTitle = $list.Title
+                                    Permissions = $folderPerms
+                                }
+                            }
+                        }
+                    }
+                }
+                catch {
+                    Write-Host "    Warning: Could not scan folders in $($list.Title): $($_.Exception.Message)" -ForegroundColor DarkYellow
+                }
+            }
+        }
+
+        Write-Host "`nScan complete! Found $($itemsWithUniquePerms.Count) items with unique permissions." -ForegroundColor Green
+        return $itemsWithUniquePerms
+    }
+    catch {
+        Write-Host "Error scanning for broken inheritance: $($_.Exception.Message)" -ForegroundColor Red
+        throw
+    }
+}
+
+# Apply item-level permissions to destination
+function Set-ItemLevelPermissions {
+    param (
+        $SourceItems,
+        [string]$DestinationSiteUrl,
+        [switch]$DryRun
+    )
+
+    Write-Host "`n=== Applying Item-Level Permissions ===" -ForegroundColor Cyan
+
+    $successCount = 0
+    $failCount = 0
+    $skippedCount = 0
+
+    foreach ($item in $SourceItems) {
+        try {
+            Write-Host "`nProcessing: $($item.Type) - $($item.Title)" -ForegroundColor Yellow
+            Write-Host "  URL: $($item.Url)" -ForegroundColor DarkGray
+
+            if ($DryRun) {
+                Write-Host "  [DRY-RUN] Would apply permissions to this item" -ForegroundColor Magenta
+
+                # Show what permissions would be applied
+                foreach ($perm in $item.Permissions) {
+                    $principal = Get-PnPProperty -ClientObject $perm -Property Member
+                    $roles = Get-PnPProperty -ClientObject $perm -Property RoleDefinitionBindings
+
+                    Write-Host "    [DRY-RUN] Permission: $($principal.Title) -> $($roles.Name -join ', ')" -ForegroundColor DarkYellow
+                }
+
+                $successCount++
+            } else {
+                # Get the destination item
+                if ($item.Type -eq "List") {
+                    $destList = Get-PnPList -Identity $item.ListId -ErrorAction SilentlyContinue
+
+                    if ($null -eq $destList) {
+                        Write-Host "  ✗ List not found in destination" -ForegroundColor Red
+                        $skippedCount++
+                        continue
+                    }
+
+                    # Break inheritance if needed
+                    if (-not $destList.HasUniqueRoleAssignments) {
+                        Write-Host "  → Breaking inheritance..." -ForegroundColor Cyan
+                        Set-PnPList -Identity $destList.Id -BreakRoleInheritance -CopyRoleAssignments
+                    }
+
+                    # Apply permissions
+                    foreach ($perm in $item.Permissions) {
+                        $principal = Get-PnPProperty -ClientObject $perm -Property Member
+                        $roles = Get-PnPProperty -ClientObject $perm -Property RoleDefinitionBindings
+
+                        foreach ($role in $roles) {
+                            Set-PnPListPermission -Identity $destList.Id -User $principal.LoginName -AddRole $role.Name -ErrorAction Stop
+                            Write-Host "    ✓ Applied: $($principal.Title) -> $($role.Name)" -ForegroundColor Green
+                        }
+                    }
+
+                    $successCount++
+
+                } elseif ($item.Type -eq "Folder") {
+                    # Get folder in destination
+                    $destFolder = Get-PnPFolder -Url $item.Url -ErrorAction SilentlyContinue
+
+                    if ($null -eq $destFolder) {
+                        Write-Host "  ✗ Folder not found in destination" -ForegroundColor Red
+                        $skippedCount++
+                        continue
+                    }
+
+                    # Get the list item for the folder
+                    $destFolderItem = Get-PnPListItem -List $item.ListId -Id $destFolder.ListItemAllFields.Id
+
+                    # Break inheritance if needed
+                    if (-not $destFolderItem.HasUniqueRoleAssignments) {
+                        Write-Host "  → Breaking inheritance..." -ForegroundColor Cyan
+                        Set-PnPListItemPermission -List $item.ListId -Identity $destFolderItem.Id -BreakRoleInheritance -CopyRoleAssignments
+                    }
+
+                    # Apply permissions
+                    foreach ($perm in $item.Permissions) {
+                        $principal = Get-PnPProperty -ClientObject $perm -Property Member
+                        $roles = Get-PnPProperty -ClientObject $perm -Property RoleDefinitionBindings
+
+                        foreach ($role in $roles) {
+                            Set-PnPListItemPermission -List $item.ListId -Identity $destFolderItem.Id -User $principal.LoginName -AddRole $role.Name -ErrorAction Stop
+                            Write-Host "    ✓ Applied: $($principal.Title) -> $($role.Name)" -ForegroundColor Green
+                        }
+                    }
+
+                    $successCount++
+                }
+            }
+        }
+        catch {
+            Write-Host "  ✗ Failed to apply permissions: $($_.Exception.Message)" -ForegroundColor Red
+            $failCount++
+        }
+    }
+
+    Write-Host "`n=== Item-Level Permissions Summary ===" -ForegroundColor Cyan
+    Write-Host "Successful: $successCount" -ForegroundColor Green
+    Write-Host "Failed: $failCount" -ForegroundColor Red
+    Write-Host "Skipped: $skippedCount" -ForegroundColor Yellow
+
+    return @{
+        Success = $successCount
+        Failed = $failCount
+        Skipped = $skippedCount
+    }
+}
+
 # Get the permissions of the requested group
 
 function Get-GroupsPermissions {
@@ -463,11 +659,48 @@ function Search-RequestedSites {
                 New-GroupInDestination -DestinationSiteName $DestinationSiteName -GroupsToCreate $groupsToMigrate -PassthroughSourceName $SourceSiteName
             }
         }
+
+        # Now scan for item-level permissions (broken inheritance)
+        Write-Host "`n`n════════════════════════════════════════════════════════" -ForegroundColor Cyan
+        Write-Host "ITEM-LEVEL PERMISSIONS (Broken Inheritance)" -ForegroundColor Cyan
+        Write-Host "════════════════════════════════════════════════════════`n" -ForegroundColor Cyan
+
+        $scanItemPerms = Read-Host "Do you want to scan for items with broken inheritance? (Y/N)"
+
+        if ($scanItemPerms.ToLower() -eq "y") {
+            # Scan source site
+            Write-Host "`nScanning SOURCE site for broken inheritance..." -ForegroundColor Yellow
+            Connect-IndicatedSite -SiteUrl $SourceSiteName
+            $sourceItemsWithUniquePerms = Get-ItemsWithBrokenInheritance -SiteUrl $SourceSiteName
+
+            if ($sourceItemsWithUniquePerms.Count -gt 0) {
+                Write-Host "`nFound $($sourceItemsWithUniquePerms.Count) items with unique permissions in SOURCE." -ForegroundColor Yellow
+
+                $applyPerms = Read-Host "Do you want to apply these permissions to DESTINATION? (Y/N)"
+
+                if ($applyPerms.ToLower() -eq "y") {
+                    # Connect to destination and apply permissions
+                    Connect-IndicatedSite -SiteUrl $DestinationSiteName
+
+                    if ($DryRun) {
+                        Set-ItemLevelPermissions -SourceItems $sourceItemsWithUniquePerms -DestinationSiteUrl $DestinationSiteName -DryRun
+                    } else {
+                        Set-ItemLevelPermissions -SourceItems $sourceItemsWithUniquePerms -DestinationSiteUrl $DestinationSiteName
+                    }
+                } else {
+                    Write-Host "Skipping item-level permissions migration." -ForegroundColor Yellow
+                }
+            } else {
+                Write-Host "No items with broken inheritance found in SOURCE site." -ForegroundColor Green
+            }
+        } else {
+            Write-Host "Skipping broken inheritance scan." -ForegroundColor Yellow
+        }
     }
     else {
         Write-Host "Groups could not be acquired from either of the sites. Terminating..." -ForegroundColor Red
         exit
-    }   
+    }
 }
 
 # Search for the SOURCE site that the user wants
