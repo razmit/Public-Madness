@@ -71,44 +71,97 @@ function Start-Migration {
         $DestinationSite
     )
     
-    Connect-IndicatedSite -SiteUrl $DestinationSite
-    
-    foreach ($group in $ValidGroups) {
-        # Write-Host "Title: $($group.Title) | Description: $($group.Description) | Owner: $($group.OwnerTitle)"
-        # Keep the name of the newly created group
-        $newlyCreatedGroup = New-PnPGroup -Title $group.Title -Description $group.Description -Owner $group.OwnerTitle -ErrorAction SilentlyContinue
-        # Give it a second to process
-        Start-Sleep -Seconds 1
-        # Begin adding the members to the newly created group
-        foreach ($member in $ValidMembers) {
-            foreach ($mem in $member["Members"]) {
-                Add-PnPGroupMember -LoginName $mem -Group $newlyCreatedGroup -ErrorAction SilentlyContinue
-            }
+    try {
+        $connected = Connect-IndicatedSite -SiteUrl $DestinationSite
+        
+        if (-not $connected) {
+            throw "Failed to connect to destination site: $DestinationSite"
         }
         
-        Start-Sleep -Seconds 1
-        # Begin adding the permissions to the newly created group
-        foreach ($perm in $ValidPermissions) {
-            # Write-Host "Group title: $($perm["Title"]) | Permissions count: $($perm["Permissions"].Count)"
-            foreach ($per in $perm["Permissions"]) {
-                Set-PnPGroupPermissions -Identity $newlyCreatedGroup -AddRole $per -ErrorAction SilentlyContinue
+        $successfulGroups = @()
+        $failedGroups = @()
+    
+        foreach ($group in $ValidGroups) {
+            # Write-Host "Title: $($group.Title) | Description: $($group.Description) | Owner: $($group.OwnerTitle)"
+            try {
+                
+                # Keep the name of the newly created group
+                $newlyCreatedGroup = New-PnPGroup -Title $group.Title -Description $group.Description -Owner $group.OwnerTitle -ErrorAction Stop
+                
+                # Catch if the group creation returned null
+                if ($null -eq $newlyCreatedGroup) {
+                    throw "✗ Group creation returned null for group: $($group.Title)"
+                }
+                
+                Write-Host "✓ Created group: $($group.Title)" -ForegroundColor Green
+                # Give it a second to process
+                Start-Sleep -Seconds 1
+                
+                # Begin adding the members to the newly created group
+                $memberCount = 0
+                foreach ($member in $ValidMembers) {
+                    foreach ($mem in $member["Members"]) {
+                        try {
+                            Add-PnPGroupMember -LoginName $mem -Group $newlyCreatedGroup -ErrorAction Stop
+                            $memberCount++
+                        }
+                        catch {
+                            Write-Host "✗ Failed to add member $mem to group $($group.Title). Error: $($_.Exception.Message)" -ForegroundColor Red
+                        }
+                    }
+                }
+                Write-Host "✓ Added $memberCount members to group: $($group.Title)" -ForegroundColor Cyan
+        
+                Start-Sleep -Seconds 1
+                
+                # Begin adding the permissions to the newly created group
+                
+                $permCount = 0
+                foreach ($perm in $ValidPermissions) {
+                    foreach ($per in $perm["Permissions"]) {
+                        try {
+                            Set-PnPGroupPermissions -Identity $newlyCreatedGroup -AddRole $per -ErrorAction Stop
+                            $permCount++
+                        }
+                        catch {
+                            Write-Host "✗ Failed to add permission $per to group $($group.Title). Error: $($_.Exception.Message)" -ForegroundColor Red
+                        }
+                    }
+                }
+                Write-Host "✓ Added $permCount permissions to group: $($group.Title)" -ForegroundColor Cyan
+            }
+            catch {
+                Write-Host "✗ Failed to create group $($group.Title). Error: $($_.Exception.Message)" -ForegroundColor Red
+                $failedGroups += @{
+                    GroupTitle = $group.Title
+                    Error = $_.Exception.Message
+                }
             }
         }
-    }
     
-    # Print out the result
-    $RoleAssignments = (Get-PnPWeb -Includes RoleAssignments).RoleAssignments
-    foreach ($RoleAssignment in $RoleAssignments) {
-        #Get the role definition bindings
-        $RoleDefinitionBindings = Get-PnPProperty -ClientObject $RoleAssignment -Property RoleDefinitionBindings
-        #Get the member details
-        $Member = Get-PnPProperty -ClientObject $RoleAssignment -Property member
-        #Output the role assignment and role definition
-        Write-Host "$($member.GetType().name): $($Member.Title) - Role: $($RoleDefinitionBindings.Name)"
-    }
+        # Print out the result
+        Write-Host "`n=== Migration Summary ===" -ForegroundColor Cyan
+        Write-Host "Successful: $($successfulGroups.Count)" -ForegroundColor Green
+        Write-Host "Failed: $($failedGroups.Count)" -ForegroundColor Red
+        
+        # Print failed groups details - if any
+        if ($failedGroups.Count -gt 0) {
+            Write-Host "`nFailed Groups:" -ForegroundColor Yellow
+            $failedGroups | ForEach-Object { Write-Host "  - $($_.GroupTitle): $($_.Error)" }
+        }
+        
+        return @{
+            Success = $successfulGroups
+            Failed = $failedGroups
+        }
     
-    Write-Host "Groups created successfully!"
-    Start-Sleep -Seconds 2
+        # Write-Host "Groups created successfully!"
+        Start-Sleep -Seconds 2
+    }
+    catch {
+        Write-Host "Critical error in Start-Migration: "$_.Exception.Message -ForegroundColor Red
+        throw
+    }
 }
 
 # Get all members of a group
@@ -117,30 +170,38 @@ function Get-GroupMembers {
         $GroupNames,
         $SourceSiteName
     )
-    Connect-IndicatedSite -SiteUrl $SourceSiteName
+    
+    $connected = Connect-IndicatedSite -SiteUrl $SourceSiteName
     $groupsMembers = @()
     
-    foreach ($group in $GroupNames) {
-        $returnedMemberLoginName = Get-PnPGroupMember -Identity $group["Title"].ToString() | Select-Object -Property LoginName -ExpandProperty LoginName | Where-Object { $null -ne $_.LoginName }
-        
-        if ($null -eq $returnedMemberLoginName) {
-            continue
-        }
-        
-        $returnedMembers = @{
-            Title   = $group["Title"]
-            Members = $returnedMemberLoginName ?? "n/a"
-        } 
-        $groupsMembers += $returnedMembers
+    if (-not $connected) {
+        throw "Failed to connect to the source site to get the group members: $SourceSiteName"
     }
     
-    # foreach ($member in $groupsMembers) {
-    #     Write-Host "Group title: $($member["Title"]) | Members count: $($member["Members"].Count)"
-    #     foreach ($mem in $member["Members"]) {
-    #         Write-Host "Member: $mem"
-    #     }
-    # }
+    if ($null -eq $GroupNames) {
+        Write-Host "No groups to get members from. Exiting function." -ForegroundColor Yellow
+        return
+    }
     
+    foreach ($group in $GroupNames) {
+        try {
+            $returnedMemberLoginName = Get-PnPGroupMember -Identity $group["Title"].ToString() | Select-Object -Property LoginName -ExpandProperty LoginName | Where-Object { $null -ne $_.LoginName }
+        
+            if ($null -eq $returnedMemberLoginName) {
+                continue
+            }
+        
+            $returnedMembers = @{
+                Title   = $group["Title"]
+                Members = $returnedMemberLoginName ?? "n/a"
+            } 
+            $groupsMembers += $returnedMembers
+        }
+        catch {
+            Write-Host "Failed to get members for group: $($group["Title"]). Error: $($_.Exception.Message)" -ForegroundColor Red
+            throw
+        }
+    }
     return $groupsMembers
 }
 
@@ -153,28 +214,44 @@ function Get-GroupsPermissions {
     )
     $groupData = @()
     
-    foreach ($group in $GroupNames) {
-        $groupPermissions = Get-PnPGroupPermissions -Identity $group["Title"].ToString() | Select-Object -Property Name -ExpandProperty Name
-        
-        if ($null -eq $groupPermissions) {
-            continue
-        }
-        
-        $returnedPerms = @{
-            Title       = $group["Title"]
-            Permissions = $groupPermissions
-        }        
-        $groupData += $returnedPerms
+    if ($null -eq $SiteName) {
+        Write-Host "Get-GroupsPermissions: No site name provided. Exiting function." -ForegroundColor Yellow
+        return
     }
     
-    Write-Host "Group data count: "$groupData.Count
+    if ($null -eq $GroupNames) {
+        Write-Host "Get-GroupsPermissions: No groups to get permissions from. Exiting function." -ForegroundColor Yellow
+        return
+    }
     
-    # foreach ($perm in $groupData) {
-    #     Write-Host "Group title: $($perm["Title"]) | Permissions count: $($perm["Permissions"].Count)"
-    #     foreach ($per in $perm["Permissions"]) {
-    #         Write-Host "Permission: "$per
-    #     }
-    # }
+    $successfulGroupPermsAcquired = @()
+    $failedGroupPermsAcquired = @()
+    
+    # Get all permissions for each group
+    foreach ($group in $GroupNames) {
+        try {
+            $groupPermissions = Get-PnPGroupPermissions -Identity $group["Title"].ToString() | Select-Object -Property Name -ExpandProperty Name
+        
+            if ($null -eq $groupPermissions) {
+                $failedGroupPermsAcquired += $group["Title"]
+                continue
+            }
+        
+            $returnedPerms = @{
+                Title       = $group["Title"]
+                Permissions = $groupPermissions
+            }        
+            $groupData += $returnedPerms
+            $successfulGroupPermsAcquired += $group["Title"]
+        }
+        catch {
+            write-Host "Get-GroupPermissions: Failed to get permissions for group: $($group["Title"]). Error: $($_.Exception.Message)" -ForegroundColor Red
+        }
+    }
+    
+    Write-Host "Group data count: "$groupData.Count -ForegroundColor Green
+    Write-Host "Successfully acquired permissions for $($successfulGroupPermsAcquired.Count) groups." -ForegroundColor Green
+    Write-Host "Failed to acquire permissions for $($failedGroupPermsAcquired.Count) groups." -ForegroundColor Red
     
     return $groupData
     
@@ -189,9 +266,19 @@ function New-GroupInDestination {
     )
     
     # Connect to destination site
-    Connect-IndicatedSite -SiteUrl $DestinationSiteName
+    $connected = Connect-IndicatedSite -SiteUrl $DestinationSiteName
+    
+    if (-not $connected) {
+        Write-Host "Failed to connect to destination site: $DestinationSiteName in order to create a new group." -ForegroundColor Red
+        return
+    }
     
     $groupData = @()
+    
+    if ($null -eq $GroupsToCreate) {
+        Write-Host "No groups to create. Exiting function." -ForegroundColor Yellow
+        return
+    }
     
     foreach ($group in $GroupsToCreate) {
         # Extract only the properties I want to transfer
@@ -208,9 +295,23 @@ function New-GroupInDestination {
     }
     
     Write-Host "`nSummary: Processed $($groupData.Count) groups" -ForegroundColor Cyan
-    $groupsMembers = Get-GroupMembers -GroupNames $groupData -SourceSiteName $PassthroughSourceName
     
-    $groupsPermissions = Get-GroupsPermissions -GroupNames $groupData -SiteName $PassthroughSourceName
+    try {
+        $groupsMembers = Get-GroupMembers -GroupNames $groupData -SourceSiteName $PassthroughSourceName    
+    }
+    catch {
+        Write-Host "New-GroupInDestination: Failed to get group members from source site: $PassthroughSourceName" -ForegroundColor Red
+        throw
+    }
+    
+    try {
+        $groupsPermissions = Get-GroupsPermissions -GroupNames $groupData -SiteName $PassthroughSourceName
+    }
+    catch {
+        Write-Host "New-GroupInDestination: Failed to get group permissions from source site: $PassthroughSourceName" -ForegroundColor Red
+        throw
+    }
+    
     
     <#
         We have 3 lists:
@@ -219,6 +320,7 @@ function New-GroupInDestination {
         * $groupsPermissions => Contains the permissions of the existing groups
         
         We have to compare the lists to make sure all of the Title fields lign up. The $groupsPermissions list is the authority, since groups with NO permissions have been removed from it. No permissions = Group not important and shouldn't be migrated.
+        Omnisiah help us.
     #>
     
     # Authoritative list of Titles
@@ -243,6 +345,16 @@ function Copy-SourceGroupsToDestination {
         $SourceSiteGroups,
         $DestinationSiteGroups
     )
+    
+    if ($null -eq $SourceSiteGroups) {
+        Write-Host "Copy-SourceGroupsToDestination: No source site groups provided. Exiting function." -ForegroundColor Yellow
+        return
+    }
+    
+    if ($null -eq $DestinationSiteGroups) {
+        Write-Host "Copy-SourceGroupsToDestination: No destination site groups provided. Exiting function." -ForegroundColor Yellow
+        return
+    }
     
     # Only keep the groups that are NOT already in the destination site
     $sourceNames = $SourceSiteGroups.Title
