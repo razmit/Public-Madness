@@ -92,15 +92,26 @@ function Start-Migration {
 
         $successfulGroups = @()
         $failedGroups = @()
-    
+
+        # Enable quiet mode for large group counts
+        $quietMode = $ValidGroups.Count -gt 100
+        $groupCounter = 0
+
+        if ($quietMode) {
+            Write-Host "`n⏳ Processing $($ValidGroups.Count) groups (quiet mode enabled)..." -ForegroundColor Cyan
+            Write-Host "   Progress will be shown every 50 groups. Errors will be displayed immediately." -ForegroundColor DarkGray
+        }
+
         foreach ($group in $ValidGroups) {
-            # Write-Host "Title: $($group.Title) | Description: $($group.Description) | Owner: $($group.OwnerTitle)"
+            $groupCounter++
             try {
 
                 if ($DryRun) {
-                    Write-Host "[DRY-RUN] Would create group: $($group.Title)" -ForegroundColor Yellow
-                    Write-Host "  Description: $($group.Description)" -ForegroundColor DarkGray
-                    Write-Host "  Owner: $($group.OwnerTitle)" -ForegroundColor DarkGray
+                    if (-not $quietMode) {
+                        Write-Host "[DRY-RUN] Would create group: $($group.Title)" -ForegroundColor Yellow
+                        Write-Host "  Description: $($group.Description)" -ForegroundColor DarkGray
+                        Write-Host "  Owner: $($group.OwnerTitle)" -ForegroundColor DarkGray
+                    }
                     $newlyCreatedGroup = @{ Title = $group.Title }  # Mock object for dry-run
                 } else {
                     # PASS 1: Create group WITHOUT owner (owner set in Pass 2 after all groups exist)
@@ -111,8 +122,15 @@ function Start-Migration {
                         throw "✗ Group creation returned null for group: $($group.Title)"
                     }
 
-                    Write-Host "✓ Created group: $($group.Title)" -ForegroundColor Green
+                    if (-not $quietMode) {
+                        Write-Host "✓ Created group: $($group.Title)" -ForegroundColor Green
+                    }
                     Start-Sleep -Seconds 1
+                }
+
+                # Show progress in quiet mode
+                if ($quietMode -and ($groupCounter % 50 -eq 0)) {
+                    Write-Host "[$groupCounter/$($ValidGroups.Count)] Groups processed..." -ForegroundColor Cyan
                 }
 
                 $successfulGroups += $group.Title
@@ -136,10 +154,13 @@ function Start-Migration {
                     }
                 }
 
-                if ($DryRun) {
-                    Write-Host "[DRY-RUN] Would add $memberCount members to group: $($group.Title)" -ForegroundColor Yellow
-                } else {
-                    Write-Host "✓ Added $memberCount members to group: $($group.Title)" -ForegroundColor Cyan
+                # Only show per-group member counts if NOT in quiet mode
+                if (-not $quietMode) {
+                    if ($DryRun) {
+                        Write-Host "[DRY-RUN] Would add $memberCount members to group: $($group.Title)" -ForegroundColor Yellow
+                    } else {
+                        Write-Host "✓ Added $memberCount members to group: $($group.Title)" -ForegroundColor Cyan
+                    }
                 }
 
                 Start-Sleep -Seconds 1
@@ -163,10 +184,13 @@ function Start-Migration {
                     }
                 }
 
-                if ($DryRun) {
-                    Write-Host "[DRY-RUN] Would add $permCount permissions to group: $($group.Title)" -ForegroundColor Yellow
-                } else {
-                    Write-Host "✓ Added $permCount permissions to group: $($group.Title)" -ForegroundColor Cyan
+                # Only show per-group permission counts if NOT in quiet mode
+                if (-not $quietMode) {
+                    if ($DryRun) {
+                        Write-Host "[DRY-RUN] Would add $permCount permissions to group: $($group.Title)" -ForegroundColor Yellow
+                    } else {
+                        Write-Host "✓ Added $permCount permissions to group: $($group.Title)" -ForegroundColor Cyan
+                    }
                 }
             }
             catch {
@@ -199,27 +223,45 @@ function Start-Migration {
             $ownershipSuccessCount = 0
             $ownershipFailCount = 0
             $ownershipSkippedCount = 0
+            $ownershipCounter = 0
+
+            if ($quietMode) {
+                Write-Host "⏳ Setting ownership for $($successfulGroups.Count) groups..." -ForegroundColor Cyan
+            }
 
             foreach ($group in $ValidGroups) {
                 # Only process groups that were successfully created
                 if ($successfulGroups -contains $group.Title) {
+                    $ownershipCounter++
                     try {
                         # Check if owner was specified
                         if ([string]::IsNullOrWhiteSpace($group.OwnerTitle)) {
-                            Write-Host "  ⊘ No owner specified for: $($group.Title)" -ForegroundColor DarkGray
+                            if (-not $quietMode) {
+                                Write-Host "  ⊘ No owner specified for: $($group.Title)" -ForegroundColor DarkGray
+                            }
                             $ownershipSkippedCount++
                             continue
                         }
 
                         # Try to set the owner
                         Set-PnPGroup -Identity $group.Title -Owner $group.OwnerTitle -ErrorAction Stop
-                        Write-Host "  ✓ Set owner for $($group.Title): $($group.OwnerTitle)" -ForegroundColor Green
+                        if (-not $quietMode) {
+                            Write-Host "  ✓ Set owner for $($group.Title): $($group.OwnerTitle)" -ForegroundColor Green
+                        }
                         $ownershipSuccessCount++
+
+                        # Show progress in quiet mode
+                        if ($quietMode -and ($ownershipCounter % 50 -eq 0)) {
+                            Write-Host "[$ownershipCounter/$($successfulGroups.Count)] Ownership set..." -ForegroundColor Cyan
+                        }
                     }
                     catch {
                         # Owner group might not exist (wasn't migrated or doesn't exist in destination)
+                        # Always show errors, even in quiet mode
                         Write-Host "  ⚠ Could not set owner for $($group.Title): $($_.Exception.Message)" -ForegroundColor DarkYellow
-                        Write-Host "    Intended owner: $($group.OwnerTitle)" -ForegroundColor DarkGray
+                        if (-not $quietMode) {
+                            Write-Host "    Intended owner: $($group.OwnerTitle)" -ForegroundColor DarkGray
+                        }
                         $ownershipFailCount++
                     }
                 }
@@ -433,21 +475,29 @@ function Copy-AssociatedGroupMembers {
         Write-Host "`n--- Populating Associated OWNERS Group ---" -ForegroundColor Yellow
         Write-Host "SOURCE: $($SourceAssociatedGroups.Owner.Title) → DESTINATION: $($DestinationAssociatedGroups.Owner.Title)" -ForegroundColor DarkGray
 
+        $totalMembers = $SourceAssociatedGroups.Owner.Members.Count
+        Write-Host "⏳ Adding $totalMembers members..." -ForegroundColor Cyan
+
         foreach ($member in $SourceAssociatedGroups.Owner.Members) {
             try {
-                if ($DryRun) {
-                    Write-Host "  [DRY-RUN] Would add: $($member.Title)" -ForegroundColor Magenta
-                    $results.OwnerSuccess++
-                } else {
+                if (-not $DryRun) {
                     Add-PnPGroupMember -LoginName $member.LoginName -Group $DestinationAssociatedGroups.Owner.Id -ErrorAction Stop
-                    Write-Host "  ✓ Added: $($member.Title)" -ForegroundColor Green
-                    $results.OwnerSuccess++
                 }
+                $results.OwnerSuccess++
             }
             catch {
                 Write-Host "  ✗ Failed to add $($member.Title): $($_.Exception.Message)" -ForegroundColor Red
                 $results.OwnerFailed++
             }
+        }
+
+        if ($DryRun) {
+            Write-Host "✓ [DRY-RUN] Would add $($results.OwnerSuccess) members" -ForegroundColor Magenta
+        } else {
+            Write-Host "✓ Successfully added $($results.OwnerSuccess) members" -ForegroundColor Green
+        }
+        if ($results.OwnerFailed -gt 0) {
+            Write-Host "✗ Failed: $($results.OwnerFailed) members" -ForegroundColor Red
         }
     }
 
@@ -456,21 +506,29 @@ function Copy-AssociatedGroupMembers {
         Write-Host "`n--- Populating Associated MEMBERS Group ---" -ForegroundColor Yellow
         Write-Host "SOURCE: $($SourceAssociatedGroups.Member.Title) → DESTINATION: $($DestinationAssociatedGroups.Member.Title)" -ForegroundColor DarkGray
 
+        $totalMembers = $SourceAssociatedGroups.Member.Members.Count
+        Write-Host "⏳ Adding $totalMembers members..." -ForegroundColor Cyan
+
         foreach ($member in $SourceAssociatedGroups.Member.Members) {
             try {
-                if ($DryRun) {
-                    Write-Host "  [DRY-RUN] Would add: $($member.Title)" -ForegroundColor Magenta
-                    $results.MemberSuccess++
-                } else {
+                if (-not $DryRun) {
                     Add-PnPGroupMember -LoginName $member.LoginName -Group $DestinationAssociatedGroups.Member.Id -ErrorAction Stop
-                    Write-Host "  ✓ Added: $($member.Title)" -ForegroundColor Green
-                    $results.MemberSuccess++
                 }
+                $results.MemberSuccess++
             }
             catch {
                 Write-Host "  ✗ Failed to add $($member.Title): $($_.Exception.Message)" -ForegroundColor Red
                 $results.MemberFailed++
             }
+        }
+
+        if ($DryRun) {
+            Write-Host "✓ [DRY-RUN] Would add $($results.MemberSuccess) members" -ForegroundColor Magenta
+        } else {
+            Write-Host "✓ Successfully added $($results.MemberSuccess) members" -ForegroundColor Green
+        }
+        if ($results.MemberFailed -gt 0) {
+            Write-Host "✗ Failed: $($results.MemberFailed) members" -ForegroundColor Red
         }
     }
 
@@ -479,21 +537,29 @@ function Copy-AssociatedGroupMembers {
         Write-Host "`n--- Populating Associated VISITORS Group ---" -ForegroundColor Yellow
         Write-Host "SOURCE: $($SourceAssociatedGroups.Visitor.Title) → DESTINATION: $($DestinationAssociatedGroups.Visitor.Title)" -ForegroundColor DarkGray
 
+        $totalMembers = $SourceAssociatedGroups.Visitor.Members.Count
+        Write-Host "⏳ Adding $totalMembers members..." -ForegroundColor Cyan
+
         foreach ($member in $SourceAssociatedGroups.Visitor.Members) {
             try {
-                if ($DryRun) {
-                    Write-Host "  [DRY-RUN] Would add: $($member.Title)" -ForegroundColor Magenta
-                    $results.VisitorSuccess++
-                } else {
+                if (-not $DryRun) {
                     Add-PnPGroupMember -LoginName $member.LoginName -Group $DestinationAssociatedGroups.Visitor.Id -ErrorAction Stop
-                    Write-Host "  ✓ Added: $($member.Title)" -ForegroundColor Green
-                    $results.VisitorSuccess++
                 }
+                $results.VisitorSuccess++
             }
             catch {
                 Write-Host "  ✗ Failed to add $($member.Title): $($_.Exception.Message)" -ForegroundColor Red
                 $results.VisitorFailed++
             }
+        }
+
+        if ($DryRun) {
+            Write-Host "✓ [DRY-RUN] Would add $($results.VisitorSuccess) members" -ForegroundColor Magenta
+        } else {
+            Write-Host "✓ Successfully added $($results.VisitorSuccess) members" -ForegroundColor Green
+        }
+        if ($results.VisitorFailed -gt 0) {
+            Write-Host "✗ Failed: $($results.VisitorFailed) members" -ForegroundColor Red
         }
     }
 
