@@ -578,7 +578,7 @@ function Export-PermissionsToCSV {
     param (
         [string]$SiteUrl,
         [string]$SiteName,
-        [string]$OutputPath = "C:\Users\E095713\Downloads\SiteCollection-Reports\"
+        [string]$OutputPath = "C:\Users\E095713\Downloads\SiteCollection-Reports\zAuditTrail"
     )
 
     Write-Host "`n=== Exporting Permissions to CSV ===" -ForegroundColor Cyan
@@ -1291,28 +1291,26 @@ function Get-SearchedDestinationSite {
     }
 }
 
-# Execute only on Wednesdays
-if ((Get-Date).DayOfWeek -eq 'Wednesday') {
+# Get today;s date in dd-MM-yyyy format
+$todayDate = Get-Date -Format "dd-MM-yyyy"
+
+# Expected path of file
+$pathToCheck = "C:\Users\E095713\Downloads\SiteCollection-Reports\SiteCollections-TenantWide-$($todayDate).csv" 
+
+# Check to see if today's file already exists
+if (Test-Path -Path $pathToCheck) {
+    Write-Host "Today's file has already been generated. Continuing with existing file."
+}
+else {
+    Write-Host "It's Wednesday! Brace yourself, the report is being generated. Praise the Omnisiah."
     
-    $todayDate = Get-Date -Format "dd-MM-yyyy"
-    
-    # Expected path of file
-    $pathToCheck = "C:\Users\E095713\Downloads\SiteCollection-Reports\SiteCollections-TenantWide-" + $todayDate + ".csv" 
-    # Check if that wednesday's file doesn't already exist
-    if (Test-Path -Path $pathToCheck) {
-        Write-Host "Today's file has already been generated. Continuing with existing file."
-    }
-    else {
-        Write-Host "It's Wednesday! Brace yourself, the report is being generated. Praise the Omnisiah."
-    
-        $connectionResult = Start-Process powershell.exe -ArgumentList '-File', .\Export_tenant_sites_to_csv.ps1 -Wait
+    $connectionResult = Start-Process powershell.exe -ArgumentList '-File', .\Export_tenant_sites_to_csv.ps1 -Wait
         
-        Write-Output $connectionResult
+    Write-Output $connectionResult
         
-        if (-not $connectionResult.Success) {
-            Write-Host "Failed to connect: "$connectionResult.Message -ForegroundColor DarkYellow
-            exit
-        }
+    if (-not $connectionResult.Success) {
+        Write-Host "Failed to connect: "$connectionResult.Message -ForegroundColor DarkYellow
+        exit
     }
 }
 
