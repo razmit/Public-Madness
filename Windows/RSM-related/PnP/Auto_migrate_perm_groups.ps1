@@ -244,6 +244,113 @@ function Start-Migration {
     }
 }
 
+# Get site collection administrators from a site
+function Get-SiteCollectionAdministrators {
+    param (
+        [string]$SiteUrl
+    )
+
+    try {
+        Write-Host "`n--- Detecting Site Collection Administrators ---" -ForegroundColor Cyan
+
+        # Get site collection admins
+        $siteAdmins = Get-PnPSiteCollectionAdmin -ErrorAction Stop
+
+        if ($siteAdmins.Count -gt 0) {
+            Write-Host "Found $($siteAdmins.Count) site collection administrator(s)" -ForegroundColor Yellow
+
+            $adminList = @()
+            foreach ($admin in $siteAdmins) {
+                Write-Host "  → $($admin.Title) ($($admin.Email))" -ForegroundColor DarkGray
+
+                $adminList += @{
+                    Title = $admin.Title
+                    Email = $admin.Email
+                    LoginName = $admin.LoginName
+                }
+            }
+
+            return $adminList
+        } else {
+            Write-Host "No site collection administrators found" -ForegroundColor DarkGray
+            return @()
+        }
+    }
+    catch {
+        Write-Host "Error getting site collection administrators: $($_.Exception.Message)" -ForegroundColor Red
+        return @()
+    }
+}
+
+# Migrate site collection administrators to destination site
+function Copy-SiteCollectionAdministrators {
+    param (
+        $SourceAdmins,
+        [string]$DestinationSiteUrl,
+        [switch]$DryRun
+    )
+
+    Write-Host "`n╔════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "║     SITE COLLECTION ADMINISTRATORS MIGRATION            ║" -ForegroundColor Cyan
+    Write-Host "╚════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+
+    if ($SourceAdmins.Count -eq 0) {
+        Write-Host "No site collection administrators to migrate." -ForegroundColor DarkGray
+        return @{
+            Success = @()
+            Failed = @()
+        }
+    }
+
+    $successfulAdmins = @()
+    $failedAdmins = @()
+
+    foreach ($admin in $SourceAdmins) {
+        try {
+            if ($DryRun) {
+                Write-Host "[DRY-RUN] Would add site collection admin: $($admin.Title)" -ForegroundColor Magenta
+                Write-Host "  Email: $($admin.Email)" -ForegroundColor DarkGray
+                Write-Host "  LoginName: $($admin.LoginName)" -ForegroundColor DarkGray
+                $successfulAdmins += $admin
+            } else {
+                # Try to add as site collection admin
+                Add-PnPSiteCollectionAdmin -Owners $admin.LoginName -ErrorAction Stop
+                Write-Host "✓ Added site collection admin: $($admin.Title)" -ForegroundColor Green
+                $successfulAdmins += $admin
+            }
+        }
+        catch {
+            Write-Host "✗ Failed to add $($admin.Title): $($_.Exception.Message)" -ForegroundColor Red
+            $failedAdmins += @{
+                Admin = $admin
+                Error = $_.Exception.Message
+            }
+        }
+    }
+
+    # Summary
+    Write-Host "`n=== Site Collection Administrators Summary ===" -ForegroundColor Cyan
+    Write-Host "Successfully migrated: $($successfulAdmins.Count)" -ForegroundColor Green
+    Write-Host "Failed: $($failedAdmins.Count)" -ForegroundColor Red
+
+    if ($failedAdmins.Count -gt 0) {
+        Write-Host "`n⚠ FAILED ADMINISTRATORS - Requires Manual Action:" -ForegroundColor Yellow
+        foreach ($failed in $failedAdmins) {
+            Write-Host "  ✗ $($failed.Admin.Title) ($($failed.Admin.Email))" -ForegroundColor Red
+            Write-Host "    Reason: $($failed.Error)" -ForegroundColor DarkYellow
+        }
+
+        Write-Host "`n ACTION REQUIRED:" -ForegroundColor Yellow
+        Write-Host "  Please manually add the failed administrators at:" -ForegroundColor Yellow
+        Write-Host "  $DestinationSiteUrl/_layouts/15/mngsiteadmin.aspx" -ForegroundColor Cyan
+    }
+
+    return @{
+        Success = $successfulAdmins
+        Failed = $failedAdmins
+    }
+}
+
 # Get all members of a group
 function Get-GroupMembers {
     param (
@@ -780,6 +887,23 @@ function Export-PermissionsToCSV {
             }
         }
 
+        # Export site collection administrators
+        Write-Host "Exporting site collection administrators..." -ForegroundColor Yellow
+
+        $siteAdmins = Get-SiteCollectionAdministrators -SiteUrl $SiteUrl
+
+        foreach ($admin in $siteAdmins) {
+            $allPermissions += [PSCustomObject]@{
+                Type = "Site Collection Administrator"
+                ItemURL = $SiteUrl
+                GroupGUID = "N/A"
+                GroupName = $admin.Title
+                PermissionLevel = "Site Collection Administrator"
+                Owner = "N/A"
+                Description = "Email: $($admin.Email), Login: $($admin.LoginName)"
+            }
+        }
+
         # Export to CSV
         $allPermissions | Export-Csv -Path $exportFileName -NoTypeInformation -Encoding UTF8
 
@@ -1275,9 +1399,53 @@ function Search-RequestedSites {
             Write-Host "Skipping permissions export." -ForegroundColor Yellow
         }
 
+        # Migrate site collection administrators
+        Write-Host "`n`n════════════════════════════════════════════════════════" -ForegroundColor Cyan
+        Write-Host "SITE COLLECTION ADMINISTRATORS" -ForegroundColor Cyan
+        Write-Host "════════════════════════════════════════════════════════`n" -ForegroundColor Cyan
+
+        $migrateAdmins = Read-Host "Do you want to migrate site collection administrators? (Y/N)"
+
+        if ($migrateAdmins.ToLower() -eq "y") {
+            # Get admins from SOURCE
+            Write-Host "`nScanning SOURCE site for site collection administrators..." -ForegroundColor Yellow
+            $null = Connect-IndicatedSite -SiteUrl $SourceSiteName
+            $sourceAdmins = Get-SiteCollectionAdministrators -SiteUrl $SourceSiteName
+
+            if ($sourceAdmins.Count -gt 0) {
+                # Attempt to migrate to DESTINATION
+                Write-Host "`nAttempting to migrate administrators to DESTINATION..." -ForegroundColor Yellow
+                $null = Connect-IndicatedSite -SiteUrl $DestinationSiteName
+
+                if ($DryRun) {
+                    $adminResults = Copy-SiteCollectionAdministrators -SourceAdmins $sourceAdmins -DestinationSiteUrl $DestinationSiteName -DryRun
+                } else {
+                    $adminResults = Copy-SiteCollectionAdministrators -SourceAdmins $sourceAdmins -DestinationSiteUrl $DestinationSiteName
+                }
+
+                # Store failed admins for final summary
+                $global:FailedSiteCollectionAdmins = $adminResults.Failed
+            } else {
+                Write-Host "No site collection administrators found in SOURCE." -ForegroundColor DarkGray
+            }
+        } else {
+            Write-Host "Skipping site collection administrators migration." -ForegroundColor Yellow
+        }
+
         Write-Host "`n`n╔════════════════════════════════════════════════════════╗" -ForegroundColor Green
         Write-Host "║          MIGRATION COMPLETE!                           ║" -ForegroundColor Green
         Write-Host "╚════════════════════════════════════════════════════════╝`n" -ForegroundColor Green
+
+        # Final reminder about failed site collection admins
+        if ($null -ne $global:FailedSiteCollectionAdmins -and $global:FailedSiteCollectionAdmins.Count -gt 0) {
+            Write-Host "`n⚠⚠⚠ IMPORTANT REMINDER ⚠⚠⚠" -ForegroundColor Red
+            Write-Host "The following site collection administrators could NOT be migrated automatically:" -ForegroundColor Yellow
+            foreach ($failed in $global:FailedSiteCollectionAdmins) {
+                Write-Host "  ✗ $($failed.Admin.Title) ($($failed.Admin.Email))" -ForegroundColor Red
+            }
+            Write-Host "`nPlease add them manually at:" -ForegroundColor Yellow
+            Write-Host "$DestinationSiteName/_layouts/15/mngsiteadmin.aspx" -ForegroundColor Cyan
+        }
     }
     else {
         Write-Host "Groups could not be acquired from either of the sites. Terminating..." -ForegroundColor Red
