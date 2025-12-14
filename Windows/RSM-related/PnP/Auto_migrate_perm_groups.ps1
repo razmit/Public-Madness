@@ -438,6 +438,141 @@ function Set-ItemLevelPermissions {
     }
 }
 
+# Recursively get all subsites from a site
+function Get-SubSitesRecursively {
+    param (
+        [string]$SiteUrl
+    )
+
+    Write-Host "`n=== Discovering Subsites ===" -ForegroundColor Cyan
+    Write-Host "Scanning: $SiteUrl" -ForegroundColor DarkCyan
+
+    $allSubsites = @()
+
+    try {
+        # Get immediate subsites
+        $subsites = Get-PnPSubWeb
+
+        if ($subsites.Count -gt 0) {
+            Write-Host "Found $($subsites.Count) immediate subsites" -ForegroundColor Yellow
+
+            foreach ($subsite in $subsites) {
+                $subsiteInfo = @{
+                    Title = $subsite.Title
+                    Url = $subsite.Url
+                    ServerRelativeUrl = $subsite.ServerRelativeUrl
+                }
+                $allSubsites += $subsiteInfo
+
+                Write-Host "  ✓ Subsite: $($subsite.Title) ($($subsite.Url))" -ForegroundColor Green
+
+                # Recursively get subsites of this subsite
+                try {
+                    Connect-PnPOnline -Url $subsite.Url -clientId f6666fe0-04e6-419a-b4bb-4025060af8f5 -interactive -ErrorAction SilentlyContinue
+                    $nestedSubsites = Get-SubSitesRecursively -SiteUrl $subsite.Url
+                    $allSubsites += $nestedSubsites
+                }
+                catch {
+                    Write-Host "    Warning: Could not scan subsites of $($subsite.Title)" -ForegroundColor DarkYellow
+                }
+            }
+        } else {
+            Write-Host "No subsites found." -ForegroundColor DarkGray
+        }
+
+        return $allSubsites
+    }
+    catch {
+        Write-Host "Error discovering subsites: $($_.Exception.Message)" -ForegroundColor Red
+        return @()
+    }
+}
+
+# Migrate permissions for a single subsite
+function Migrate-SubSitePermissions {
+    param (
+        [string]$SourceSubSiteUrl,
+        [string]$DestinationSubSiteUrl,
+        [switch]$DryRun
+    )
+
+    Write-Host "`n╔════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "║          SUBSITE MIGRATION                             ║" -ForegroundColor Cyan
+    Write-Host "╚════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+    Write-Host "SOURCE:      $SourceSubSiteUrl" -ForegroundColor Yellow
+    Write-Host "DESTINATION: $DestinationSubSiteUrl" -ForegroundColor Yellow
+
+    try {
+        # Connect to SOURCE subsite
+        Write-Host "`nConnecting to SOURCE subsite..." -ForegroundColor Cyan
+        $null = Connect-IndicatedSite -SiteUrl $SourceSubSiteUrl
+
+        # Get SOURCE groups
+        $sourceGroups = Get-PnPGroup | Where-Object {
+            ($_.Title -notlike "Limited Access System Group*") -and
+            ($_.Title -notlike "SharingLinks*")
+        }
+        Write-Host "✓ Found $($sourceGroups.Count) groups in SOURCE subsite" -ForegroundColor Green
+
+        # Connect to DESTINATION subsite
+        Write-Host "Connecting to DESTINATION subsite..." -ForegroundColor Cyan
+        $null = Connect-IndicatedSite -SiteUrl $DestinationSubSiteUrl
+
+        # Get DESTINATION groups
+        $destinationGroups = Get-PnPGroup | Where-Object {
+            ($_.Title -notlike "Limited Access System Group*") -and
+            ($_.Title -notlike "SharingLinks*")
+        }
+        Write-Host "✓ Found $($destinationGroups.Count) groups in DESTINATION subsite" -ForegroundColor Green
+
+        # Compare and migrate
+        $groupsToMigrate = Copy-SourceGroupsToDestination -SourceSiteGroups $sourceGroups -DestinationSiteGroups $destinationGroups
+
+        if ($groupsToMigrate.Count -eq 0) {
+            Write-Host "No groups to migrate for this subsite." -ForegroundColor Yellow
+        } elseif ($groupsToMigrate.Count -ge 1) {
+            Write-Host "Migrating $($groupsToMigrate.Count) groups..." -ForegroundColor DarkCyan
+
+            if ($DryRun) {
+                New-GroupInDestination -DestinationSiteName $DestinationSubSiteUrl -GroupsToCreate $groupsToMigrate -PassthroughSourceName $SourceSubSiteUrl -DryRun
+            } else {
+                New-GroupInDestination -DestinationSiteName $DestinationSubSiteUrl -GroupsToCreate $groupsToMigrate -PassthroughSourceName $SourceSubSiteUrl
+            }
+        }
+
+        # Scan for broken inheritance in subsite
+        $scanSubsiteItems = Read-Host "`nScan this subsite for broken inheritance? (Y/N)"
+
+        if ($scanSubsiteItems.ToLower() -eq "y") {
+            $null = Connect-IndicatedSite -SiteUrl $SourceSubSiteUrl
+            $sourceItemsWithUniquePerms = Get-ItemsWithBrokenInheritance -SiteUrl $SourceSubSiteUrl
+
+            if ($sourceItemsWithUniquePerms.Count -gt 0) {
+                Write-Host "Found $($sourceItemsWithUniquePerms.Count) items with broken inheritance" -ForegroundColor Yellow
+
+                $applySubsitePerms = Read-Host "Apply these permissions to DESTINATION subsite? (Y/N)"
+
+                if ($applySubsitePerms.ToLower() -eq "y") {
+                    $null = Connect-IndicatedSite -SiteUrl $DestinationSubSiteUrl
+
+                    if ($DryRun) {
+                        Set-ItemLevelPermissions -SourceItems $sourceItemsWithUniquePerms -DestinationSiteUrl $DestinationSubSiteUrl -DryRun
+                    } else {
+                        Set-ItemLevelPermissions -SourceItems $sourceItemsWithUniquePerms -DestinationSiteUrl $DestinationSubSiteUrl
+                    }
+                }
+            } else {
+                Write-Host "No broken inheritance found in this subsite." -ForegroundColor Green
+            }
+        }
+
+        Write-Host "`n✓ Subsite migration complete!" -ForegroundColor Green
+    }
+    catch {
+        Write-Host "Error migrating subsite: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
+
 # Export all permissions to CSV for audit trail
 function Export-PermissionsToCSV {
     param (
@@ -811,6 +946,70 @@ function Search-RequestedSites {
             }
         } else {
             Write-Host "Skipping broken inheritance scan." -ForegroundColor Yellow
+        }
+
+        # Subsite migration
+        Write-Host "`n`n════════════════════════════════════════════════════════" -ForegroundColor Cyan
+        Write-Host "SUBSITE MIGRATION" -ForegroundColor Cyan
+        Write-Host "════════════════════════════════════════════════════════`n" -ForegroundColor Cyan
+
+        $migrateSubsites = Read-Host "Do you want to migrate subsites? (Y/N)"
+
+        if ($migrateSubsites.ToLower() -eq "y") {
+            # Discover SOURCE subsites
+            Write-Host "`nDiscovering SOURCE subsites..." -ForegroundColor Yellow
+            $null = Connect-IndicatedSite -SiteUrl $SourceSiteName
+            $sourceSubsites = Get-SubSitesRecursively -SiteUrl $SourceSiteName
+
+            if ($sourceSubsites.Count -gt 0) {
+                Write-Host "`nFound $($sourceSubsites.Count) subsites in SOURCE" -ForegroundColor Green
+
+                # Discover DESTINATION subsites
+                Write-Host "Discovering DESTINATION subsites..." -ForegroundColor Yellow
+                $null = Connect-IndicatedSite -SiteUrl $DestinationSiteName
+                $destinationSubsites = Get-SubSitesRecursively -SiteUrl $DestinationSiteName
+
+                Write-Host "Found $($destinationSubsites.Count) subsites in DESTINATION" -ForegroundColor Green
+
+                # Match subsites by relative URL structure
+                foreach ($sourceSubsite in $sourceSubsites) {
+                    # Extract relative path (everything after the parent site URL)
+                    $sourceRelativePath = $sourceSubsite.ServerRelativeUrl
+
+                    # Try to find matching destination subsite
+                    $matchingDestSubsite = $destinationSubsites | Where-Object {
+                        $_.ServerRelativeUrl -like "*$($sourceRelativePath.Split('/')[-1])"
+                    } | Select-Object -First 1
+
+                    if ($null -ne $matchingDestSubsite) {
+                        Write-Host "`n--- MATCHED SUBSITE PAIR ---" -ForegroundColor Cyan
+                        Write-Host "SOURCE:      $($sourceSubsite.Title) ($($sourceSubsite.Url))" -ForegroundColor Yellow
+                        Write-Host "DESTINATION: $($matchingDestSubsite.Title) ($($matchingDestSubsite.Url))" -ForegroundColor Yellow
+
+                        $migrateThisSubsite = Read-Host "Migrate this subsite pair? (Y/N)"
+
+                        if ($migrateThisSubsite.ToLower() -eq "y") {
+                            if ($DryRun) {
+                                Migrate-SubSitePermissions -SourceSubSiteUrl $sourceSubsite.Url -DestinationSubSiteUrl $matchingDestSubsite.Url -DryRun
+                            } else {
+                                Migrate-SubSitePermissions -SourceSubSiteUrl $sourceSubsite.Url -DestinationSubSiteUrl $matchingDestSubsite.Url
+                            }
+                        } else {
+                            Write-Host "Skipped subsite: $($sourceSubsite.Title)" -ForegroundColor DarkGray
+                        }
+                    } else {
+                        Write-Host "`n⚠ WARNING: No matching destination subsite found for: $($sourceSubsite.Title)" -ForegroundColor Red
+                        Write-Host "  SOURCE URL: $($sourceSubsite.Url)" -ForegroundColor DarkYellow
+                        Write-Host "  You may need to create this subsite in DESTINATION first." -ForegroundColor DarkYellow
+                    }
+                }
+
+                Write-Host "`n✓ All subsites processed!" -ForegroundColor Green
+            } else {
+                Write-Host "No subsites found in SOURCE site." -ForegroundColor DarkGray
+            }
+        } else {
+            Write-Host "Skipping subsite migration." -ForegroundColor Yellow
         }
 
         # Export permissions for audit trail
