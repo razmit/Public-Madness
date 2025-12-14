@@ -351,6 +351,161 @@ function Copy-SiteCollectionAdministrators {
     }
 }
 
+# Detect and map associated groups (Owners/Members/Visitors)
+function Get-AssociatedGroups {
+    param (
+        [string]$SiteUrl
+    )
+
+    Write-Host "`n--- Detecting Associated Groups ---" -ForegroundColor Cyan
+
+    try {
+        # Get the web object with associated groups properties
+        $web = Get-PnPWeb -Includes AssociatedOwnerGroup,AssociatedMemberGroup,AssociatedVisitorGroup
+
+        $associatedGroups = @{
+            Owner = $null
+            Member = $null
+            Visitor = $null
+        }
+
+        if ($null -ne $web.AssociatedOwnerGroup) {
+            $ownerGroup = Get-PnPGroup -Identity $web.AssociatedOwnerGroup.Id -Includes Users
+            $associatedGroups.Owner = @{
+                Title = $ownerGroup.Title
+                Id = $ownerGroup.Id
+                Members = $ownerGroup.Users | Select-Object -Property Title, Email, LoginName
+            }
+            Write-Host "  Associated Owners: $($ownerGroup.Title) ($($ownerGroup.Users.Count) members)" -ForegroundColor Green
+        }
+
+        if ($null -ne $web.AssociatedMemberGroup) {
+            $memberGroup = Get-PnPGroup -Identity $web.AssociatedMemberGroup.Id -Includes Users
+            $associatedGroups.Member = @{
+                Title = $memberGroup.Title
+                Id = $memberGroup.Id
+                Members = $memberGroup.Users | Select-Object -Property Title, Email, LoginName
+            }
+            Write-Host "  Associated Members: $($memberGroup.Title) ($($memberGroup.Users.Count) members)" -ForegroundColor Green
+        }
+
+        if ($null -ne $web.AssociatedVisitorGroup) {
+            $visitorGroup = Get-PnPGroup -Identity $web.AssociatedVisitorGroup.Id -Includes Users
+            $associatedGroups.Visitor = @{
+                Title = $visitorGroup.Title
+                Id = $visitorGroup.Id
+                Members = $visitorGroup.Users | Select-Object -Property Title, Email, LoginName
+            }
+            Write-Host "  Associated Visitors: $($visitorGroup.Title) ($($visitorGroup.Users.Count) members)" -ForegroundColor Green
+        }
+
+        return $associatedGroups
+    }
+    catch {
+        Write-Host "Error detecting associated groups: $($_.Exception.Message)" -ForegroundColor Red
+        return $null
+    }
+}
+
+# Populate destination associated groups with source members
+function Copy-AssociatedGroupMembers {
+    param (
+        $SourceAssociatedGroups,
+        $DestinationAssociatedGroups,
+        [switch]$DryRun
+    )
+
+    Write-Host "`n╔════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "║          ASSOCIATED GROUPS POPULATION                  ║" -ForegroundColor Cyan
+    Write-Host "╚════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+
+    $results = @{
+        OwnerSuccess = 0
+        OwnerFailed = 0
+        MemberSuccess = 0
+        MemberFailed = 0
+        VisitorSuccess = 0
+        VisitorFailed = 0
+    }
+
+    # Map Owners
+    if ($null -ne $SourceAssociatedGroups.Owner -and $null -ne $DestinationAssociatedGroups.Owner) {
+        Write-Host "`n--- Populating Associated OWNERS Group ---" -ForegroundColor Yellow
+        Write-Host "SOURCE: $($SourceAssociatedGroups.Owner.Title) → DESTINATION: $($DestinationAssociatedGroups.Owner.Title)" -ForegroundColor DarkGray
+
+        foreach ($member in $SourceAssociatedGroups.Owner.Members) {
+            try {
+                if ($DryRun) {
+                    Write-Host "  [DRY-RUN] Would add: $($member.Title)" -ForegroundColor Magenta
+                    $results.OwnerSuccess++
+                } else {
+                    Add-PnPGroupMember -LoginName $member.LoginName -Group $DestinationAssociatedGroups.Owner.Id -ErrorAction Stop
+                    Write-Host "  ✓ Added: $($member.Title)" -ForegroundColor Green
+                    $results.OwnerSuccess++
+                }
+            }
+            catch {
+                Write-Host "  ✗ Failed to add $($member.Title): $($_.Exception.Message)" -ForegroundColor Red
+                $results.OwnerFailed++
+            }
+        }
+    }
+
+    # Map Members
+    if ($null -ne $SourceAssociatedGroups.Member -and $null -ne $DestinationAssociatedGroups.Member) {
+        Write-Host "`n--- Populating Associated MEMBERS Group ---" -ForegroundColor Yellow
+        Write-Host "SOURCE: $($SourceAssociatedGroups.Member.Title) → DESTINATION: $($DestinationAssociatedGroups.Member.Title)" -ForegroundColor DarkGray
+
+        foreach ($member in $SourceAssociatedGroups.Member.Members) {
+            try {
+                if ($DryRun) {
+                    Write-Host "  [DRY-RUN] Would add: $($member.Title)" -ForegroundColor Magenta
+                    $results.MemberSuccess++
+                } else {
+                    Add-PnPGroupMember -LoginName $member.LoginName -Group $DestinationAssociatedGroups.Member.Id -ErrorAction Stop
+                    Write-Host "  ✓ Added: $($member.Title)" -ForegroundColor Green
+                    $results.MemberSuccess++
+                }
+            }
+            catch {
+                Write-Host "  ✗ Failed to add $($member.Title): $($_.Exception.Message)" -ForegroundColor Red
+                $results.MemberFailed++
+            }
+        }
+    }
+
+    # Map Visitors
+    if ($null -ne $SourceAssociatedGroups.Visitor -and $null -ne $DestinationAssociatedGroups.Visitor) {
+        Write-Host "`n--- Populating Associated VISITORS Group ---" -ForegroundColor Yellow
+        Write-Host "SOURCE: $($SourceAssociatedGroups.Visitor.Title) → DESTINATION: $($DestinationAssociatedGroups.Visitor.Title)" -ForegroundColor DarkGray
+
+        foreach ($member in $SourceAssociatedGroups.Visitor.Members) {
+            try {
+                if ($DryRun) {
+                    Write-Host "  [DRY-RUN] Would add: $($member.Title)" -ForegroundColor Magenta
+                    $results.VisitorSuccess++
+                } else {
+                    Add-PnPGroupMember -LoginName $member.LoginName -Group $DestinationAssociatedGroups.Visitor.Id -ErrorAction Stop
+                    Write-Host "  ✓ Added: $($member.Title)" -ForegroundColor Green
+                    $results.VisitorSuccess++
+                }
+            }
+            catch {
+                Write-Host "  ✗ Failed to add $($member.Title): $($_.Exception.Message)" -ForegroundColor Red
+                $results.VisitorFailed++
+            }
+        }
+    }
+
+    # Summary
+    Write-Host "`n=== Associated Groups Summary ===" -ForegroundColor Cyan
+    Write-Host "Owners   - Success: $($results.OwnerSuccess), Failed: $($results.OwnerFailed)" -ForegroundColor $(if($results.OwnerFailed -eq 0){"Green"}else{"Yellow"})
+    Write-Host "Members  - Success: $($results.MemberSuccess), Failed: $($results.MemberFailed)" -ForegroundColor $(if($results.MemberFailed -eq 0){"Green"}else{"Yellow"})
+    Write-Host "Visitors - Success: $($results.VisitorSuccess), Failed: $($results.VisitorFailed)" -ForegroundColor $(if($results.VisitorFailed -eq 0){"Green"}else{"Yellow"})
+
+    return $results
+}
+
 # Get all members of a group
 function Get-GroupMembers {
     param (
@@ -1161,33 +1316,114 @@ function New-GroupInDestination {
 function Copy-SourceGroupsToDestination {
     param (
         $SourceSiteGroups,
-        $DestinationSiteGroups
+        $DestinationSiteGroups,
+        $SourceAssociatedGroups = $null
     )
-    
+
     if ($null -eq $SourceSiteGroups) {
         Write-Host "Copy-SourceGroupsToDestination: No source site groups provided. Exiting function." -ForegroundColor Yellow
         return
     }
-    
+
     if ($null -eq $DestinationSiteGroups) {
         Write-Host "Copy-SourceGroupsToDestination: No destination site groups provided. Exiting function." -ForegroundColor Yellow
         return
     }
-    
-    # Only keep the groups that are NOT already in the destination site
+
+    # Build list of associated group titles to exclude
+    $associatedGroupTitles = @()
+    if ($null -ne $SourceAssociatedGroups) {
+        if ($null -ne $SourceAssociatedGroups.Owner) { $associatedGroupTitles += $SourceAssociatedGroups.Owner.Title }
+        if ($null -ne $SourceAssociatedGroups.Member) { $associatedGroupTitles += $SourceAssociatedGroups.Member.Title }
+        if ($null -ne $SourceAssociatedGroups.Visitor) { $associatedGroupTitles += $SourceAssociatedGroups.Visitor.Title }
+    }
+
+    # Only keep the groups that are NOT already in the destination site AND NOT associated groups
     $sourceNames = $SourceSiteGroups.Title
     $destinationNames = $DestinationSiteGroups.Title
-    
+
     $differences = Compare-Object -ReferenceObject $destinationNames -DifferenceObject $sourceNames | Where-Object { $_.SideIndicator -eq "=>" }
-    
-    $groupsToMigrate = $SourceSiteGroups | Where-Object { $_.Title -in $differences.InputObject }
-    
+
+    $groupsToMigrate = $SourceSiteGroups | Where-Object {
+        $_.Title -in $differences.InputObject -and
+        $_.Title -notin $associatedGroupTitles
+    }
+
+    if ($associatedGroupTitles.Count -gt 0) {
+        Write-Host "`nℹ Excluding associated groups from migration (will be handled separately):" -ForegroundColor Cyan
+        $associatedGroupTitles | ForEach-Object { Write-Host "  - $_" -ForegroundColor DarkGray }
+    }
+
     if ($groupsToMigrate.Count -eq 0) {
         return 0
     }
-    
+
     return $groupsToMigrate
-    
+
+}
+
+# Get groups with progress indication and aggressive filtering
+function Get-FilteredGroups {
+    param (
+        [string]$SiteType  # "SOURCE" or "DESTINATION"
+    )
+
+    Write-Host "Retrieving groups from $SiteType site..." -ForegroundColor Yellow
+    Write-Host "(This may take a while if there are many groups...)" -ForegroundColor DarkGray
+
+    try {
+        # Retrieve all groups with timeout handling
+        $allGroups = @()
+        $retrievalStart = Get-Date
+
+        # Start async job to show progress
+        Write-Host "⏳ Fetching groups..." -ForegroundColor Cyan
+
+        $allGroups = Get-PnPGroup -ErrorAction Stop
+
+        $retrievalTime = ((Get-Date) - $retrievalStart).TotalSeconds
+        Write-Host "✓ Retrieved $($allGroups.Count) total groups in $([math]::Round($retrievalTime, 1)) seconds" -ForegroundColor Green
+
+        # Aggressive filtering of system groups
+        Write-Host "🔍 Filtering out system groups..." -ForegroundColor Cyan
+
+        $filteredGroups = $allGroups | Where-Object {
+            $title = $_.Title
+
+            # Exclude patterns (case-insensitive)
+            $title -notlike "Limited Access*" -and
+            $title -notlike "SharingLinks*" -and
+            $title -notlike "STE_*" -and
+            $title -notlike "Everyone*" -and
+            $title -notlike "Company Administrator*" -and
+            $title -notlike "Excel Services Viewers*" -and
+            $title -notlike "Viewers*" -and
+            $title -notmatch "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"  # Exclude GUID-only names
+        } | Sort-Object -Property Id
+
+        $filteredCount = $filteredGroups.Count
+        $excludedCount = $allGroups.Count - $filteredCount
+
+        Write-Host "✓ Filtered to $filteredCount groups ($excludedCount system groups excluded)" -ForegroundColor Green
+
+        # Warning if still a lot of groups
+        if ($filteredCount -gt 500) {
+            Write-Host "`n⚠ WARNING: $filteredCount groups found! This is unusually high." -ForegroundColor Yellow
+            Write-Host "  This may take a long time to process." -ForegroundColor Yellow
+            Write-Host "  Consider migrating fewer sites at once or investigating why so many groups exist." -ForegroundColor Yellow
+
+            $proceed = Read-Host "`nProceed anyway? (Y/N)"
+            if ($proceed.ToLower() -ne "y") {
+                throw "User cancelled due to high group count"
+            }
+        }
+
+        return $filteredGroups
+    }
+    catch {
+        Write-Host "✗ Error retrieving groups: $($_.Exception.Message)" -ForegroundColor Red
+        throw
+    }
 }
 
 <#
@@ -1216,9 +1452,9 @@ function Search-RequestedSites {
                         throw "Failed to connect to SOURCE site"
                     }
 
-                    $sourceGroups = Get-PnPGroup | Where-Object { ($_.Title -notlike "Limited Access System Group*") -and ($_.Title -notlike "SharingLinks*") } | Sort-Object -Property Id
+                    # Use new helper function with progress and better filtering
+                    $sourceGroups = Get-FilteredGroups -SiteType "SOURCE"
                     $sourceSearched = $true
-                    Write-Host "✓ SOURCE site groups retrieved: $($sourceGroups.Count)" -ForegroundColor Green
                 }
                 elseif ($param -eq "DestinationSiteName") {
                     Write-Host "`n--- Connecting to DESTINATION site ---" -ForegroundColor Cyan
@@ -1228,7 +1464,8 @@ function Search-RequestedSites {
                         throw "Failed to connect to DESTINATION site"
                     }
 
-                    $destinationGroups = Get-PNPGroup | Where-Object { ($_.Title -notlike "Limited Access System Group*") -and ($_.Title -notlike "SharingLinks*") } | Sort-Object -Property Id
+                    # Use new helper function with progress and better filtering
+                    $destinationGroups = Get-FilteredGroups -SiteType "DESTINATION"
                     $destinationSearched = $true
                     Write-Host "✓ DESTINATION site groups retrieved: $($destinationGroups.Count)" -ForegroundColor Green
                 }
@@ -1251,7 +1488,25 @@ function Search-RequestedSites {
             Copy-CustomPermissionLevels -SourceSiteUrl $SourceSiteName -DestinationSiteUrl $DestinationSiteName
         }
 
-        $groupsToMigrate = Copy-SourceGroupsToDestination -SourceSiteGroups $sourceGroups -DestinationSiteGroups $destinationGroups
+        # Detect associated groups from both source and destination
+        Write-Host "`n--- Detecting Associated Groups ---" -ForegroundColor Cyan
+        $null = Connect-IndicatedSite -SiteUrl $SourceSiteName
+        $sourceAssociatedGroups = Get-AssociatedGroups -SiteUrl $SourceSiteName
+
+        $null = Connect-IndicatedSite -SiteUrl $DestinationSiteName
+        $destinationAssociatedGroups = Get-AssociatedGroups -SiteUrl $DestinationSiteName
+
+        # Populate destination associated groups with source members
+        if ($null -ne $sourceAssociatedGroups -and $null -ne $destinationAssociatedGroups) {
+            if ($DryRun) {
+                Copy-AssociatedGroupMembers -SourceAssociatedGroups $sourceAssociatedGroups -DestinationAssociatedGroups $destinationAssociatedGroups -DryRun
+            } else {
+                Copy-AssociatedGroupMembers -SourceAssociatedGroups $sourceAssociatedGroups -DestinationAssociatedGroups $destinationAssociatedGroups
+            }
+        }
+
+        # Migrate regular groups (excluding associated groups)
+        $groupsToMigrate = Copy-SourceGroupsToDestination -SourceSiteGroups $sourceGroups -DestinationSiteGroups $destinationGroups -SourceAssociatedGroups $sourceAssociatedGroups
         
         if ($groupsToMigrate.Count -eq 0) {
             Write-Host "There are no differences between the sites. All groups are the same between the two." -ForegroundColor Yellow
