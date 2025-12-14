@@ -241,6 +241,64 @@ function Get-GroupMembers {
     return $groupsMembers
 }
 
+# Recursive helper function to scan folders and all nested subfolders
+function Get-FoldersRecursively {
+    param (
+        [string]$FolderPath,
+        [string]$ListId,
+        [string]$ListTitle,
+        [int]$Depth = 0
+    )
+
+    $foldersWithUniquePerms = @()
+    $indent = "  " * ($Depth + 2)
+
+    try {
+        # Get all folders in the current folder
+        $folders = Get-PnPFolderItem -FolderSiteRelativeUrl $FolderPath -ItemType Folder -ErrorAction Stop
+
+        foreach ($folder in $folders) {
+            # Skip system folders at all levels
+            if ($folder.Name -notin @("Forms", "_cts", "_w", "Attachments")) {
+                try {
+                    $folderItem = Get-PnPListItem -List $ListId -Id $folder.ListItemAllFields.Id -Includes HasUniqueRoleAssignments -ErrorAction Stop
+
+                    if ($folderItem.HasUniqueRoleAssignments) {
+                        Write-Host "$indent✓ Folder has unique permissions: $($folder.Name)" -ForegroundColor Green
+
+                        $folderPerms = Get-PnPProperty -ClientObject $folderItem -Property RoleAssignments
+
+                        $foldersWithUniquePerms += @{
+                            Type = "Folder"
+                            Title = $folder.Name
+                            Url = $folder.ServerRelativeUrl
+                            ListId = $ListId
+                            ListTitle = $ListTitle
+                            Permissions = $folderPerms
+                            Depth = $Depth
+                        }
+                    }
+
+                    # Recursively scan this folder's subfolders
+                    $nestedFolders = Get-FoldersRecursively -FolderPath $folder.ServerRelativeUrl -ListId $ListId -ListTitle $ListTitle -Depth ($Depth + 1)
+                    $foldersWithUniquePerms += $nestedFolders
+                }
+                catch {
+                    Write-Host "$indent⚠ Warning: Could not scan folder '$($folder.Name)': $($_.Exception.Message)" -ForegroundColor DarkYellow
+                }
+            }
+        }
+    }
+    catch {
+        # Silently handle folders that can't be enumerated (usually means no subfolders or access issues)
+        if ($_.Exception.Message -notlike "*does not exist*" -and $_.Exception.Message -notlike "*Cannot find*") {
+            Write-Host "$indent⚠ Warning: Could not enumerate folders in path: $($_.Exception.Message)" -ForegroundColor DarkYellow
+        }
+    }
+
+    return $foldersWithUniquePerms
+}
+
 # Scan for items with broken inheritance (lists, libraries, folders only - NO FILES)
 function Get-ItemsWithBrokenInheritance {
     param (
@@ -283,32 +341,12 @@ function Get-ItemsWithBrokenInheritance {
                 }
             }
 
-            # Scan folders in document libraries
+            # Scan folders in document libraries (recursively to handle nested folders)
             if ($list.BaseTemplate -eq 101) {  # Document Library
                 try {
-                    $folders = Get-PnPFolderItem -FolderSiteRelativeUrl $list.RootFolder.ServerRelativeUrl -ItemType Folder
-
-                    foreach ($folder in $folders) {
-                        # Skip system folders
-                        if ($folder.Name -notin @("Forms", "_cts", "_w")) {
-                            $folderItem = Get-PnPListItem -List $list.Id -Id $folder.ListItemAllFields.Id -Includes HasUniqueRoleAssignments
-
-                            if ($folderItem.HasUniqueRoleAssignments) {
-                                Write-Host "    ✓ Folder has unique permissions: $($folder.Name)" -ForegroundColor Green
-
-                                $folderPerms = Get-PnPProperty -ClientObject $folderItem -Property RoleAssignments
-
-                                $itemsWithUniquePerms += @{
-                                    Type = "Folder"
-                                    Title = $folder.Name
-                                    Url = $folder.ServerRelativeUrl
-                                    ListId = $list.Id
-                                    ListTitle = $list.Title
-                                    Permissions = $folderPerms
-                                }
-                            }
-                        }
-                    }
+                    # Use recursive function to scan all folders at all levels
+                    $foldersWithPerms = Get-FoldersRecursively -FolderPath $list.RootFolder.ServerRelativeUrl -ListId $list.Id -ListTitle $list.Title -Depth 0
+                    $itemsWithUniquePerms += $foldersWithPerms
                 }
                 catch {
                     Write-Host "    Warning: Could not scan folders in $($list.Title): $($_.Exception.Message)" -ForegroundColor DarkYellow
