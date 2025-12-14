@@ -103,8 +103,8 @@ function Start-Migration {
                     Write-Host "  Owner: $($group.OwnerTitle)" -ForegroundColor DarkGray
                     $newlyCreatedGroup = @{ Title = $group.Title }  # Mock object for dry-run
                 } else {
-                    # Keep the name of the newly created group
-                    $newlyCreatedGroup = New-PnPGroup -Title $group.Title -Description $group.Description -Owner $group.OwnerTitle -ErrorAction Stop
+                    # PASS 1: Create group WITHOUT owner (owner set in Pass 2 after all groups exist)
+                    $newlyCreatedGroup = New-PnPGroup -Title $group.Title -Description $group.Description -ErrorAction Stop
 
                     # Catch if the group creation returned null
                     if ($null -eq $newlyCreatedGroup) {
@@ -189,7 +189,50 @@ function Start-Migration {
             $failedGroups | ForEach-Object { Write-Host "  - $($_.GroupTitle): $($_.Error)" }
         }
         Start-Sleep -Seconds 2
-        
+
+        # PASS 2: Set group ownership now that all groups exist
+        if (-not $DryRun) {
+            Write-Host "`n╔════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+            Write-Host "║          PASS 2: Setting Group Ownership               ║" -ForegroundColor Cyan
+            Write-Host "╚════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+
+            $ownershipSuccessCount = 0
+            $ownershipFailCount = 0
+            $ownershipSkippedCount = 0
+
+            foreach ($group in $ValidGroups) {
+                # Only process groups that were successfully created
+                if ($successfulGroups -contains $group.Title) {
+                    try {
+                        # Check if owner was specified
+                        if ([string]::IsNullOrWhiteSpace($group.OwnerTitle)) {
+                            Write-Host "  ⊘ No owner specified for: $($group.Title)" -ForegroundColor DarkGray
+                            $ownershipSkippedCount++
+                            continue
+                        }
+
+                        # Try to set the owner
+                        Set-PnPGroup -Identity $group.Title -Owner $group.OwnerTitle -ErrorAction Stop
+                        Write-Host "  ✓ Set owner for $($group.Title): $($group.OwnerTitle)" -ForegroundColor Green
+                        $ownershipSuccessCount++
+                    }
+                    catch {
+                        # Owner group might not exist (wasn't migrated or doesn't exist in destination)
+                        Write-Host "  ⚠ Could not set owner for $($group.Title): $($_.Exception.Message)" -ForegroundColor DarkYellow
+                        Write-Host "    Intended owner: $($group.OwnerTitle)" -ForegroundColor DarkGray
+                        $ownershipFailCount++
+                    }
+                }
+            }
+
+            Write-Host "`n=== Ownership Summary ===" -ForegroundColor Cyan
+            Write-Host "Ownership set: $ownershipSuccessCount" -ForegroundColor Green
+            Write-Host "Failed: $ownershipFailCount" -ForegroundColor Red
+            Write-Host "Skipped (no owner): $ownershipSkippedCount" -ForegroundColor Yellow
+        } else {
+            Write-Host "`n[DRY-RUN] PASS 2: Would set group ownership for successfully created groups" -ForegroundColor Magenta
+        }
+
         return @{
             Success = $successfulGroups
             Failed = $failedGroups
