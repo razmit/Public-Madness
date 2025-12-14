@@ -1382,6 +1382,96 @@ function Get-SearchedDestinationSite {
     }
 }
 
+# Manual URL entry for Classic→Modern flattening migrations
+function Get-ManualSiteUrls {
+    Write-Host "`n╔════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "║     MANUAL URL ENTRY (Classic→Modern Flattening)       ║" -ForegroundColor Cyan
+    Write-Host "╚════════════════════════════════════════════════════════╝`n" -ForegroundColor Cyan
+
+    # Get SOURCE URL
+    Write-Host "Enter the full SOURCE site URL (including subsites):" -ForegroundColor Yellow
+    Write-Host "Example: https://rsmnet.sharepoint.com/sites/Teams/Audit/NPSG/MAPS" -ForegroundColor DarkGray
+    $sourceUrl = Read-Host "SOURCE URL"
+
+    # Validate URL format
+    if ($sourceUrl -notmatch '^https?://') {
+        Write-Host "⚠ URL must start with http:// or https://. Please try again." -ForegroundColor Red
+        return $null
+    }
+
+    # Extract tenant URL and relative path
+    if ($sourceUrl -match '^(https?://[^/]+)(.*)$') {
+        $tenantUrl = $matches[1]
+        $sourceRelativePath = $matches[2]
+    } else {
+        Write-Host "⚠ Could not parse URL. Please check the format." -ForegroundColor Red
+        return $null
+    }
+
+    # Get root segment for flattening
+    Write-Host "`nEnter the segment to become the new top-level site:" -ForegroundColor Yellow
+    Write-Host "This is typically the last part of your source URL (e.g., 'MAPS' from the example above)" -ForegroundColor DarkGray
+    Write-Host "Current source path: $sourceRelativePath" -ForegroundColor DarkCyan
+    $rootSegment = Read-Host "Root segment"
+
+    # Validate that the segment exists in the source URL (case-insensitive)
+    $pathParts = $sourceRelativePath.Split('/', [StringSplitOptions]::RemoveEmptyEntries)
+    $matchingSegment = $pathParts | Where-Object { $_ -ieq $rootSegment } | Select-Object -First 1
+
+    if (-not $matchingSegment) {
+        Write-Host "⚠ The segment '$rootSegment' was not found in the source URL path: $sourceRelativePath" -ForegroundColor Red
+        Write-Host "Available segments: $($pathParts -join ', ')" -ForegroundColor DarkYellow
+        return $null
+    }
+
+    # Auto-construct destination URL
+    $autoDestUrl = "$tenantUrl/sites/$matchingSegment"
+
+    Write-Host "`n--- AUTO-CONSTRUCTED DESTINATION ---" -ForegroundColor Cyan
+    Write-Host "Based on your inputs, the destination would be:" -ForegroundColor Yellow
+    Write-Host "  $autoDestUrl" -ForegroundColor Green
+
+    # Offer manual override option
+    Write-Host "`nDo you want to use this auto-constructed destination URL? (Y/N)" -ForegroundColor Yellow
+    Write-Host "Choose [N] if you need a different destination (e.g., different tenant, custom name)" -ForegroundColor DarkGray
+    $useAuto = Read-Host "Use auto-constructed URL"
+
+    if ($useAuto.ToLower() -eq "y") {
+        $destUrl = $autoDestUrl
+    } else {
+        Write-Host "`nEnter the full DESTINATION site URL:" -ForegroundColor Yellow
+        Write-Host "Example: https://rsmnet.sharepoint.com/sites/MAPS" -ForegroundColor DarkGray
+        $destUrl = Read-Host "DESTINATION URL"
+
+        if ($destUrl -notmatch '^https?://') {
+            Write-Host "⚠ URL must start with http:// or https://. Please try again." -ForegroundColor Red
+            return $null
+        }
+    }
+
+    # Final confirmation
+    Write-Host "`n╔════════════════════════════════════════════════════════╗" -ForegroundColor Green
+    Write-Host "║                  MIGRATION MAPPING                      ║" -ForegroundColor Green
+    Write-Host "╚════════════════════════════════════════════════════════╝" -ForegroundColor Green
+    Write-Host "SOURCE:      $sourceUrl" -ForegroundColor Yellow
+    Write-Host "DESTINATION: $destUrl" -ForegroundColor Yellow
+    Write-Host "`nSubsites will be mapped accordingly:" -ForegroundColor Cyan
+    Write-Host "  Example: $sourceUrl/ProjectA → $destUrl/ProjectA" -ForegroundColor DarkGray
+
+    Write-Host "`nIs this mapping correct? (Y/N)" -ForegroundColor Yellow
+    $confirm = Read-Host "Confirm"
+
+    if ($confirm.ToLower() -eq "y") {
+        return @{
+            Source = $sourceUrl
+            Destination = $destUrl
+        }
+    } else {
+        Write-Host "Migration cancelled. Please run the script again." -ForegroundColor Red
+        return $null
+    }
+}
+
 # Execute only on Wednesdays
 if ((Get-Date).DayOfWeek -eq 'Wednesday') {
     
@@ -1491,15 +1581,42 @@ do {
             Write-Host "`n*** LIVE MIGRATION MODE - Changes will be applied ***`n" -ForegroundColor Green
         }
 
-        # Get the latest created CSV file. Since these are supposed to run every Wednesday, the one chosen will always be the most up to date. The resulting file name will have the full path (FullName)
-        $latestFile = Get-ChildItem -Path "C:\Users\E095713\Downloads\SiteCollection-Reports\" -Attributes !D *.* | Sort-Object -Descending -Property CreationTime | Select-Object -First 1 -ExpandProperty FullName
-        
-        # Variable to store the selected SOURCE site
-        $resultOfSearchingForSourceSite = Get-SearchedSourceSite -CSVFileOfSites $latestFile 
-        
-        
-        # Variable to store the selected DESTINATION site
-        $resultOfSearchingForDestinationSite = Get-SearchedDestinationSite -CSVFileOfSites $latestFile
+        # Ask user how they want to specify sites
+        Write-Host "`n╔════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+        Write-Host "║            SITE SELECTION METHOD                        ║" -ForegroundColor Cyan
+        Write-Host "╚════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
+        Write-Host "[1] Select from CSV (site collections only)" -ForegroundColor Yellow
+        Write-Host "    Use this for simple migrations between site collections" -ForegroundColor DarkGray
+        Write-Host "`n[2] Manual URL entry (for subsites and Classic→Modern flattening)" -ForegroundColor Yellow
+        Write-Host "    Use this when migrating deep subsites to flat Modern sites" -ForegroundColor DarkGray
+        Write-Host "    Example: /sites/Teams/Audit/NPSG/MAPS → /sites/MAPS" -ForegroundColor DarkGray
+
+        $selectionMethod = Read-Host "`nYour choice (1 or 2)"
+
+        if ($selectionMethod -eq "2") {
+            # Manual URL entry
+            $manualUrls = Get-ManualSiteUrls
+
+            if ($null -eq $manualUrls) {
+                Write-Host "`n⚠ Manual URL entry failed or was cancelled. Exiting." -ForegroundColor Red
+                continue
+            }
+
+            $resultOfSearchingForSourceSite = $manualUrls.Source
+            $resultOfSearchingForDestinationSite = $manualUrls.Destination
+        } else {
+            # CSV selection (existing logic)
+            Write-Host "`nUsing CSV site selection..." -ForegroundColor Cyan
+
+            # Get the latest created CSV file
+            $latestFile = Get-ChildItem -Path "C:\Users\E095713\Downloads\SiteCollection-Reports\" -Attributes !D *.* | Sort-Object -Descending -Property CreationTime | Select-Object -First 1 -ExpandProperty FullName
+
+            # Variable to store the selected SOURCE site
+            $resultOfSearchingForSourceSite = Get-SearchedSourceSite -CSVFileOfSites $latestFile
+
+            # Variable to store the selected DESTINATION site
+            $resultOfSearchingForDestinationSite = Get-SearchedDestinationSite -CSVFileOfSites $latestFile
+        }
 
         # Send both site names to the function for getting their permission groups
         if ($useDryRun) {
