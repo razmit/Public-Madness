@@ -241,6 +241,45 @@ function Get-GroupMembers {
     return $groupsMembers
 }
 
+# Helper function to transform source paths to destination paths (handles Classic → Modern flattening)
+function Convert-SourcePathToDestination {
+    param (
+        [string]$SourcePath,          # e.g., "/sites/Teams/Audit/NPSG/MAPS/ProjectA"
+        [string]$SourceRootUrl,       # e.g., "https://tenant.sharepoint.com/sites/Teams/Audit/NPSG/MAPS"
+        [string]$DestinationRootUrl   # e.g., "https://tenant.sharepoint.com/sites/MAPS"
+    )
+
+    # Extract ServerRelativeUrl from full URLs if needed
+    $sourceRootRelative = if ($SourceRootUrl -match "(https?://[^/]+)(.*)") { $matches[2] } else { $SourceRootUrl }
+    $destRootRelative = if ($DestinationRootUrl -match "(https?://[^/]+)(.*)") { $matches[2] } else { $DestinationRootUrl }
+    $sourcePathRelative = if ($SourcePath -match "(https?://[^/]+)(.*)") { $matches[2] } else { $SourcePath }
+
+    # Remove trailing slashes for consistent matching
+    $sourceRootRelative = $sourceRootRelative.TrimEnd('/')
+    $destRootRelative = $destRootRelative.TrimEnd('/')
+    $sourcePathRelative = $sourcePathRelative.TrimEnd('/')
+
+    # If the source path IS the source root, return destination root
+    if ($sourcePathRelative -eq $sourceRootRelative) {
+        return $destRootRelative
+    }
+
+    # If the source path starts with the source root, replace it
+    if ($sourcePathRelative.StartsWith($sourceRootRelative)) {
+        # Get the relative portion after the source root
+        $relativePortion = $sourcePathRelative.Substring($sourceRootRelative.Length)
+
+        # Combine with destination root
+        $destinationPath = "$destRootRelative$relativePortion"
+
+        return $destinationPath
+    }
+
+    # If no match, return original path (shouldn't happen in normal operation)
+    Write-Warning "Could not transform path: $SourcePath (source root: $sourceRootRelative)"
+    return $sourcePathRelative
+}
+
 # Recursive helper function to scan folders and all nested subfolders
 function Get-FoldersRecursively {
     param (
@@ -367,6 +406,7 @@ function Get-ItemsWithBrokenInheritance {
 function Set-ItemLevelPermissions {
     param (
         $SourceItems,
+        [string]$SourceSiteUrl,
         [string]$DestinationSiteUrl,
         [switch]$DryRun
     )
@@ -397,10 +437,11 @@ function Set-ItemLevelPermissions {
             } else {
                 # Get the destination item
                 if ($item.Type -eq "List") {
-                    $destList = Get-PnPList -Identity $item.ListId -ErrorAction SilentlyContinue
+                    # Match by Title (more reliable than ID after Sharegate migration)
+                    $destList = Get-PnPList | Where-Object { $_.Title -eq $item.Title } | Select-Object -First 1
 
                     if ($null -eq $destList) {
-                        Write-Host "  ✗ List not found in destination" -ForegroundColor Red
+                        Write-Host "  ✗ List '$($item.Title)' not found in destination" -ForegroundColor Red
                         $skippedCount++
                         continue
                     }
@@ -425,22 +466,28 @@ function Set-ItemLevelPermissions {
                     $successCount++
 
                 } elseif ($item.Type -eq "Folder") {
-                    # Get folder in destination
-                    $destFolder = Get-PnPFolder -Url $item.Url -ErrorAction SilentlyContinue
+                    # Transform source folder URL to destination URL
+                    $destFolderUrl = Convert-SourcePathToDestination -SourcePath $item.Url -SourceRootUrl $SourceSiteUrl -DestinationRootUrl $DestinationSiteUrl
+
+                    Write-Host "  Transformed URL: $($item.Url) → $destFolderUrl" -ForegroundColor DarkGray
+
+                    # Get folder in destination using transformed URL
+                    $destFolder = Get-PnPFolder -Url $destFolderUrl -ErrorAction SilentlyContinue
 
                     if ($null -eq $destFolder) {
-                        Write-Host "  ✗ Folder not found in destination" -ForegroundColor Red
+                        Write-Host "  ✗ Folder not found at destination URL: $destFolderUrl" -ForegroundColor Red
                         $skippedCount++
                         continue
                     }
 
-                    # Get the list item for the folder
-                    $destFolderItem = Get-PnPListItem -List $item.ListId -Id $destFolder.ListItemAllFields.Id
+                    # Get the list item for the folder (match list by Title)
+                    $destList = Get-PnPList | Where-Object { $_.Title -eq $item.ListTitle } | Select-Object -First 1
+                    $destFolderItem = Get-PnPListItem -List $destList.Id -Id $destFolder.ListItemAllFields.Id
 
                     # Break inheritance if needed
                     if (-not $destFolderItem.HasUniqueRoleAssignments) {
                         Write-Host "  → Breaking inheritance..." -ForegroundColor Cyan
-                        Set-PnPListItemPermission -List $item.ListId -Identity $destFolderItem.Id -BreakRoleInheritance -CopyRoleAssignments
+                        Set-PnPListItemPermission -List $destList.Id -Identity $destFolderItem.Id -BreakRoleInheritance -CopyRoleAssignments
                     }
 
                     # Apply permissions
@@ -449,7 +496,7 @@ function Set-ItemLevelPermissions {
                         $roles = Get-PnPProperty -ClientObject $perm -Property RoleDefinitionBindings
 
                         foreach ($role in $roles) {
-                            Set-PnPListItemPermission -List $item.ListId -Identity $destFolderItem.Id -User $principal.LoginName -AddRole $role.Name -ErrorAction Stop
+                            Set-PnPListItemPermission -List $destList.Id -Identity $destFolderItem.Id -User $principal.LoginName -AddRole $role.Name -ErrorAction Stop
                             Write-Host "    ✓ Applied: $($principal.Title) -> $($role.Name)" -ForegroundColor Green
                         }
                     }
@@ -594,9 +641,9 @@ function Migrate-SubSitePermissions {
                     $null = Connect-IndicatedSite -SiteUrl $DestinationSubSiteUrl
 
                     if ($DryRun) {
-                        Set-ItemLevelPermissions -SourceItems $sourceItemsWithUniquePerms -DestinationSiteUrl $DestinationSubSiteUrl -DryRun
+                        Set-ItemLevelPermissions -SourceItems $sourceItemsWithUniquePerms -SourceSiteUrl $SourceSubSiteUrl -DestinationSiteUrl $DestinationSubSiteUrl -DryRun
                     } else {
-                        Set-ItemLevelPermissions -SourceItems $sourceItemsWithUniquePerms -DestinationSiteUrl $DestinationSubSiteUrl
+                        Set-ItemLevelPermissions -SourceItems $sourceItemsWithUniquePerms -SourceSiteUrl $SourceSubSiteUrl -DestinationSiteUrl $DestinationSubSiteUrl
                     }
                 }
             } else {
@@ -1076,9 +1123,9 @@ function Search-RequestedSites {
                     $null = Connect-IndicatedSite -SiteUrl $DestinationSiteName
 
                     if ($DryRun) {
-                        Set-ItemLevelPermissions -SourceItems $sourceItemsWithUniquePerms -DestinationSiteUrl $DestinationSiteName -DryRun
+                        Set-ItemLevelPermissions -SourceItems $sourceItemsWithUniquePerms -SourceSiteUrl $SourceSiteName -DestinationSiteUrl $DestinationSiteName -DryRun
                     } else {
-                        Set-ItemLevelPermissions -SourceItems $sourceItemsWithUniquePerms -DestinationSiteUrl $DestinationSiteName
+                        Set-ItemLevelPermissions -SourceItems $sourceItemsWithUniquePerms -SourceSiteUrl $SourceSiteName -DestinationSiteUrl $DestinationSiteName
                     }
                 } else {
                     Write-Host "Skipping item-level permissions migration." -ForegroundColor Yellow
@@ -1113,20 +1160,25 @@ function Search-RequestedSites {
 
                 Write-Host "Found $($destinationSubsites.Count) subsites in DESTINATION" -ForegroundColor Green
 
-                # Match subsites by relative URL structure
+                # Match subsites using path transformation (handles Classic → Modern flattening)
                 foreach ($sourceSubsite in $sourceSubsites) {
-                    # Extract relative path (everything after the parent site URL)
-                    $sourceRelativePath = $sourceSubsite.ServerRelativeUrl
+                    # Transform source subsite URL to expected destination URL
+                    $expectedDestUrl = Convert-SourcePathToDestination -SourcePath $sourceSubsite.ServerRelativeUrl -SourceRootUrl $SourceSiteName -DestinationRootUrl $DestinationSiteName
 
-                    # Try to find matching destination subsite
+                    Write-Host "`n--- SUBSITE MAPPING ---" -ForegroundColor Cyan
+                    Write-Host "SOURCE:   $($sourceSubsite.Title)" -ForegroundColor Yellow
+                    Write-Host "  URL: $($sourceSubsite.ServerRelativeUrl)" -ForegroundColor DarkGray
+                    Write-Host "EXPECTED DESTINATION:" -ForegroundColor Yellow
+                    Write-Host "  URL: $expectedDestUrl" -ForegroundColor DarkGray
+
+                    # Try to find matching destination subsite by transformed URL
                     $matchingDestSubsite = $destinationSubsites | Where-Object {
-                        $_.ServerRelativeUrl -like "*$($sourceRelativePath.Split('/')[-1])"
+                        $_.ServerRelativeUrl -eq $expectedDestUrl
                     } | Select-Object -First 1
 
                     if ($null -ne $matchingDestSubsite) {
-                        Write-Host "`n--- MATCHED SUBSITE PAIR ---" -ForegroundColor Cyan
-                        Write-Host "SOURCE:      $($sourceSubsite.Title) ($($sourceSubsite.Url))" -ForegroundColor Yellow
-                        Write-Host "DESTINATION: $($matchingDestSubsite.Title) ($($matchingDestSubsite.Url))" -ForegroundColor Yellow
+                        Write-Host "✓ MATCHED:" -ForegroundColor Green
+                        Write-Host "  DESTINATION: $($matchingDestSubsite.Title) ($($matchingDestSubsite.Url))" -ForegroundColor Green
 
                         $migrateThisSubsite = Read-Host "Migrate this subsite pair? (Y/N)"
 
@@ -1140,9 +1192,10 @@ function Search-RequestedSites {
                             Write-Host "Skipped subsite: $($sourceSubsite.Title)" -ForegroundColor DarkGray
                         }
                     } else {
-                        Write-Host "`n⚠ WARNING: No matching destination subsite found for: $($sourceSubsite.Title)" -ForegroundColor Red
-                        Write-Host "  SOURCE URL: $($sourceSubsite.Url)" -ForegroundColor DarkYellow
-                        Write-Host "  You may need to create this subsite in DESTINATION first." -ForegroundColor DarkYellow
+                        Write-Host "✗ NO MATCH FOUND" -ForegroundColor Red
+                        Write-Host "  Expected destination URL: $expectedDestUrl" -ForegroundColor DarkYellow
+                        Write-Host "  This subsite may not exist in DESTINATION yet." -ForegroundColor DarkYellow
+                        Write-Host "  Sharegate should create subsites during content migration." -ForegroundColor DarkYellow
                     }
                 }
 
