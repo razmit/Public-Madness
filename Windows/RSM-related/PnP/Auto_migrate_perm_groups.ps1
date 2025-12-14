@@ -1362,6 +1362,70 @@ function Copy-SourceGroupsToDestination {
 
 }
 
+# Get groups with progress indication and aggressive filtering
+function Get-FilteredGroups {
+    param (
+        [string]$SiteType  # "SOURCE" or "DESTINATION"
+    )
+
+    Write-Host "Retrieving groups from $SiteType site..." -ForegroundColor Yellow
+    Write-Host "(This may take a while if there are many groups...)" -ForegroundColor DarkGray
+
+    try {
+        # Retrieve all groups with timeout handling
+        $allGroups = @()
+        $retrievalStart = Get-Date
+
+        # Start async job to show progress
+        Write-Host "⏳ Fetching groups..." -ForegroundColor Cyan
+
+        $allGroups = Get-PnPGroup -ErrorAction Stop
+
+        $retrievalTime = ((Get-Date) - $retrievalStart).TotalSeconds
+        Write-Host "✓ Retrieved $($allGroups.Count) total groups in $([math]::Round($retrievalTime, 1)) seconds" -ForegroundColor Green
+
+        # Aggressive filtering of system groups
+        Write-Host "🔍 Filtering out system groups..." -ForegroundColor Cyan
+
+        $filteredGroups = $allGroups | Where-Object {
+            $title = $_.Title
+
+            # Exclude patterns (case-insensitive)
+            $title -notlike "Limited Access*" -and
+            $title -notlike "SharingLinks*" -and
+            $title -notlike "STE_*" -and
+            $title -notlike "Everyone*" -and
+            $title -notlike "Company Administrator*" -and
+            $title -notlike "Excel Services Viewers*" -and
+            $title -notlike "Viewers*" -and
+            $title -notmatch "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"  # Exclude GUID-only names
+        } | Sort-Object -Property Id
+
+        $filteredCount = $filteredGroups.Count
+        $excludedCount = $allGroups.Count - $filteredCount
+
+        Write-Host "✓ Filtered to $filteredCount groups ($excludedCount system groups excluded)" -ForegroundColor Green
+
+        # Warning if still a lot of groups
+        if ($filteredCount -gt 500) {
+            Write-Host "`n⚠ WARNING: $filteredCount groups found! This is unusually high." -ForegroundColor Yellow
+            Write-Host "  This may take a long time to process." -ForegroundColor Yellow
+            Write-Host "  Consider migrating fewer sites at once or investigating why so many groups exist." -ForegroundColor Yellow
+
+            $proceed = Read-Host "`nProceed anyway? (Y/N)"
+            if ($proceed.ToLower() -ne "y") {
+                throw "User cancelled due to high group count"
+            }
+        }
+
+        return $filteredGroups
+    }
+    catch {
+        Write-Host "✗ Error retrieving groups: $($_.Exception.Message)" -ForegroundColor Red
+        throw
+    }
+}
+
 <#
     Function to acquire the permission groups of the chosen sites, both SOURCE and DESTINATION
 #>
@@ -1388,9 +1452,9 @@ function Search-RequestedSites {
                         throw "Failed to connect to SOURCE site"
                     }
 
-                    $sourceGroups = Get-PnPGroup | Where-Object { ($_.Title -notlike "Limited Access System Group*") -and ($_.Title -notlike "SharingLinks*") } | Sort-Object -Property Id
+                    # Use new helper function with progress and better filtering
+                    $sourceGroups = Get-FilteredGroups -SiteType "SOURCE"
                     $sourceSearched = $true
-                    Write-Host "✓ SOURCE site groups retrieved: $($sourceGroups.Count)" -ForegroundColor Green
                 }
                 elseif ($param -eq "DestinationSiteName") {
                     Write-Host "`n--- Connecting to DESTINATION site ---" -ForegroundColor Cyan
@@ -1400,7 +1464,8 @@ function Search-RequestedSites {
                         throw "Failed to connect to DESTINATION site"
                     }
 
-                    $destinationGroups = Get-PNPGroup | Where-Object { ($_.Title -notlike "Limited Access System Group*") -and ($_.Title -notlike "SharingLinks*") } | Sort-Object -Property Id
+                    # Use new helper function with progress and better filtering
+                    $destinationGroups = Get-FilteredGroups -SiteType "DESTINATION"
                     $destinationSearched = $true
                     Write-Host "✓ DESTINATION site groups retrieved: $($destinationGroups.Count)" -ForegroundColor Green
                 }
