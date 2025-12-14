@@ -1451,7 +1451,7 @@ function Get-ManualSiteUrls {
 
     # Final confirmation
     Write-Host "`n╔════════════════════════════════════════════════════════╗" -ForegroundColor Green
-    Write-Host "║                  MIGRATION MAPPING                      ║" -ForegroundColor Green
+    Write-Host "║                  MIGRATION MAPPING                     ║" -ForegroundColor Green
     Write-Host "╚════════════════════════════════════════════════════════╝" -ForegroundColor Green
     Write-Host "SOURCE:      $sourceUrl" -ForegroundColor Yellow
     Write-Host "DESTINATION: $destUrl" -ForegroundColor Yellow
@@ -1483,7 +1483,7 @@ if (Test-Path -Path $pathToCheck) {
     Write-Host "Today's file has already been generated. Continuing with existing file."
 }
 else {
-    Write-Host "It's Wednesday! Brace yourself, the report is being generated. Praise the Omnisiah."
+    Write-Host "It's report time! Brace yourself, the report is being generated. Praise the Omnisiah."
     
     $connectionResult = Start-Process powershell.exe -ArgumentList '-File', .\Export_tenant_sites_to_csv.ps1 -Wait
         
@@ -1532,7 +1532,7 @@ $menu = @'
 |                    ⠈⣿⣆⡀⠀⠀⠀⠀⠀⠀⢀⣠⣴⡾⠃⠀              |  
 |                  ⠀⠀⠈⠛⠻⢿⣿⣾⣿⡿⠿⠟⠋⠁⠀⠀⠀               |
 |                                                  |
-|              MIGRATION-MAN v1.0                  |
+|              MIGRATION-MAN v2.0                  |
 |                                                  |
 |  Welcome to Migration-Man, your SharePoint       |
 |  migration magician.                             |
@@ -1581,7 +1581,7 @@ do {
 
         # Ask user how they want to specify sites
         Write-Host "`n╔════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-        Write-Host "║            SITE SELECTION METHOD                        ║" -ForegroundColor Cyan
+        Write-Host "║            SITE SELECTION METHOD                       ║" -ForegroundColor Cyan
         Write-Host "╚════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
         Write-Host "[1] Select from CSV (site collections only)" -ForegroundColor Yellow
         Write-Host "    Use this for simple migrations between site collections" -ForegroundColor DarkGray
