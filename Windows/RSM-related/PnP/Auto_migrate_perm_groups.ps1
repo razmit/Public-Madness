@@ -271,7 +271,8 @@ function Get-ItemsWithBrokenInheritance {
             if ($listItem.HasUniqueRoleAssignments) {
                 Write-Host "    ✓ List has unique permissions" -ForegroundColor Green
 
-                $permissions = Get-PnPListItem -List $list.Id | Get-PnPProperty -Property RoleAssignments
+                # Get role assignments for the list itself
+                $permissions = Get-PnPProperty -ClientObject $listItem -Property RoleAssignments
 
                 $itemsWithUniquePerms += @{
                     Type = "List"
@@ -577,10 +578,14 @@ function Get-GroupsPermissions {
     
     Write-Host "Group data count: "$groupData.Count -ForegroundColor Green
     Write-Host "Successfully acquired permissions for $($successfulGroupPermsAcquired.Count) groups." -ForegroundColor Green
-    Write-Host "Failed to acquire permissions for $($failedGroupPermsAcquired.Count) groups." -ForegroundColor Red
-    
+
+    if ($failedGroupPermsAcquired.Count -gt 0) {
+        Write-Host "Failed to acquire permissions for $($failedGroupPermsAcquired.Count) groups:" -ForegroundColor Red
+        $failedGroupPermsAcquired | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
+    }
+
     return $groupData
-    
+
 }
 
 # Function to create a new group in the DESTINATION site
@@ -721,20 +726,29 @@ function Search-RequestedSites {
         
         foreach ($param in $PSBoundParameters.Keys) {
             try {
-                # Connect to the site with dynamic URL
-                $connectionResult = Connect-IndicatedSite -SiteUrl $PSBoundParameters[$param]
-
-                if (-not $connectionResult) {
-                    throw "Failed to connect to site"
-                }
-
                 if ($param -eq "SourceSiteName") {
+                    Write-Host "`n--- Connecting to SOURCE site ---" -ForegroundColor Cyan
+                    $connectionResult = Connect-IndicatedSite -SiteUrl $PSBoundParameters[$param]
+
+                    if (-not $connectionResult) {
+                        throw "Failed to connect to SOURCE site"
+                    }
+
                     $sourceGroups = Get-PnPGroup | Where-Object { ($_.Title -notlike "Limited Access System Group*") -and ($_.Title -notlike "SharingLinks*") } | Sort-Object -Property Id
                     $sourceSearched = $true
+                    Write-Host "✓ SOURCE site groups retrieved: $($sourceGroups.Count)" -ForegroundColor Green
                 }
                 elseif ($param -eq "DestinationSiteName") {
+                    Write-Host "`n--- Connecting to DESTINATION site ---" -ForegroundColor Cyan
+                    $connectionResult = Connect-IndicatedSite -SiteUrl $PSBoundParameters[$param]
+
+                    if (-not $connectionResult) {
+                        throw "Failed to connect to DESTINATION site"
+                    }
+
                     $destinationGroups = Get-PNPGroup | Where-Object { ($_.Title -notlike "Limited Access System Group*") -and ($_.Title -notlike "SharingLinks*") } | Sort-Object -Property Id
                     $destinationSearched = $true
+                    Write-Host "✓ DESTINATION site groups retrieved: $($destinationGroups.Count)" -ForegroundColor Green
                 }
             }
             catch {
