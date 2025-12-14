@@ -1309,13 +1309,23 @@ function New-GroupInDestination {
     }
     
     $groupData = @()
-    
+
     if ($null -eq $GroupsToCreate) {
         Write-Host "No groups to create. Exiting function." -ForegroundColor Yellow
         return
     }
-    
+
+    # Enable quiet mode for large group counts
+    $quietMode = $GroupsToCreate.Count -gt 100
+
+    if ($quietMode) {
+        Write-Host "`n⏳ Extracting $($GroupsToCreate.Count) groups (quiet mode enabled)..." -ForegroundColor Cyan
+    }
+
+    $extractCounter = 0
     foreach ($group in $GroupsToCreate) {
+        $extractCounter++
+
         # Extract only the properties I want to transfer
         $groupInfo = @{
             Title       = $group.Title ?? ""
@@ -1323,12 +1333,20 @@ function New-GroupInDestination {
             Description = $group.Description ?? ""
             Id          = $group.Id ?? $null
         }
-        
+
         $groupData += $groupInfo
-        
-        Write-Host "Extracted - Title: $($groupInfo.Title) | Owner: $($groupInfo.OwnerTitle)" -ForegroundColor Green
+
+        # Only show individual extractions if NOT in quiet mode
+        if (-not $quietMode) {
+            Write-Host "Extracted - Title: $($groupInfo.Title) | Owner: $($groupInfo.OwnerTitle)" -ForegroundColor Green
+        }
+
+        # Show progress in quiet mode
+        if ($quietMode -and ($extractCounter % 50 -eq 0)) {
+            Write-Host "[$extractCounter/$($GroupsToCreate.Count)] Groups extracted..." -ForegroundColor Cyan
+        }
     }
-    
+
     Write-Host "`nSummary: Processed $($groupData.Count) groups" -ForegroundColor Cyan
     
     try {
