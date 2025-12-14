@@ -578,37 +578,58 @@ function Get-GroupMembers {
         $GroupNames,
         $SourceSiteName
     )
-    
+
     $connected = Connect-IndicatedSite -SiteUrl $SourceSiteName
     $groupsMembers = @()
-    
+
     if (-not $connected) {
         throw "Failed to connect to the source site to get the group members: $SourceSiteName"
     }
-    
+
     if ($null -eq $GroupNames) {
         Write-Host "No groups to get members from. Exiting function." -ForegroundColor Yellow
         throw
     }
-    
+
+    # Enable quiet mode for large group counts
+    $quietMode = $GroupNames.Count -gt 100
+    $memberCounter = 0
+
+    if ($quietMode) {
+        Write-Host "`n⏳ Retrieving members for $($GroupNames.Count) groups..." -ForegroundColor Cyan
+        Write-Host "   This may take several minutes. Progress shown every 50 groups." -ForegroundColor DarkGray
+    }
+
     foreach ($group in $GroupNames) {
+        $memberCounter++
+
         try {
             $returnedMemberLoginName = Get-PnPGroupMember -Identity $group["Title"].ToString() | Select-Object -Property LoginName -ExpandProperty LoginName | Where-Object { $null -ne $_.LoginName }
-        
+
             if ($null -eq $returnedMemberLoginName) {
                 continue
             }
-        
+
             $returnedMembers = @{
                 Title   = $group["Title"]
                 Members = $returnedMemberLoginName ?? "n/a"
-            } 
+            }
             $groupsMembers += $returnedMembers
+
+            # Show progress in quiet mode
+            if ($quietMode -and ($memberCounter % 50 -eq 0)) {
+                Write-Host "[$memberCounter/$($GroupNames.Count)] Group members retrieved..." -ForegroundColor Cyan
+            }
         }
         catch {
             Write-Host "Failed to get members for group: $($group["Title"]). Error: $($_.Exception.Message)" -ForegroundColor Red
         }
     }
+
+    if ($quietMode) {
+        Write-Host "✓ Completed: Retrieved members for $($groupsMembers.Count) groups" -ForegroundColor Green
+    }
+
     return $groupsMembers
 }
 
@@ -1255,32 +1276,52 @@ function Get-GroupsPermissions {
     
     $successfulGroupPermsAcquired = @()
     $failedGroupPermsAcquired = @()
-    
+
+    # Enable quiet mode for large group counts
+    $quietMode = $GroupNames.Count -gt 100
+    $permCounter = 0
+
+    if ($quietMode) {
+        Write-Host "`n⏳ Retrieving permissions for $($GroupNames.Count) groups..." -ForegroundColor Cyan
+        Write-Host "   This may take several minutes. Progress shown every 50 groups." -ForegroundColor DarkGray
+    }
+
     # Get all permissions for each group
     foreach ($group in $GroupNames) {
+        $permCounter++
+
         try {
             $groupPermissions = Get-PnPGroupPermissions -Identity $group["Title"].ToString() | Select-Object -Property Name -ExpandProperty Name
-        
+
             if ($null -eq $groupPermissions) {
                 $failedGroupPermsAcquired += $group["Title"]
                 continue
             }
-        
+
             $returnedPerms = @{
                 Title       = $group["Title"]
                 Permissions = $groupPermissions
-            }        
+            }
             $groupData += $returnedPerms
             $successfulGroupPermsAcquired += $group["Title"]
+
+            # Show progress in quiet mode
+            if ($quietMode -and ($permCounter % 50 -eq 0)) {
+                Write-Host "[$permCounter/$($GroupNames.Count)] Group permissions retrieved..." -ForegroundColor Cyan
+            }
         }
         catch {
             write-Host "Get-GroupPermissions: Failed to get permissions for group: $($group["Title"]). Error: $($_.Exception.Message)" -ForegroundColor Red
             $failedGroupPermsAcquired += $group["Title"]
         }
     }
-    
-    Write-Host "Group data count: "$groupData.Count -ForegroundColor Green
-    Write-Host "Successfully acquired permissions for $($successfulGroupPermsAcquired.Count) groups." -ForegroundColor Green
+
+    if ($quietMode) {
+        Write-Host "✓ Completed: Retrieved permissions for $($groupData.Count) groups" -ForegroundColor Green
+    } else {
+        Write-Host "Group data count: "$groupData.Count -ForegroundColor Green
+        Write-Host "Successfully acquired permissions for $($successfulGroupPermsAcquired.Count) groups." -ForegroundColor Green
+    }
 
     if ($failedGroupPermsAcquired.Count -gt 0) {
         Write-Host "Failed to acquire permissions for $($failedGroupPermsAcquired.Count) groups:" -ForegroundColor Red
