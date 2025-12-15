@@ -99,7 +99,7 @@ function Start-Migration {
 
         if ($quietMode) {
             Write-Host "`n⏳ Processing $($ValidGroups.Count) groups (quiet mode enabled)..." -ForegroundColor Cyan
-            Write-Host "   Progress will be shown every 50 groups. Errors will be displayed immediately." -ForegroundColor DarkGray
+            Write-Host "   Progress shown at: 1, 5, 10, 20, then every 50 groups. Errors will be displayed immediately." -ForegroundColor DarkGray
         }
 
         foreach ($group in $ValidGroups) {
@@ -128,9 +128,11 @@ function Start-Migration {
                     Start-Sleep -Seconds 1
                 }
 
-                # Show progress in quiet mode
-                if ($quietMode -and ($groupCounter % 50 -eq 0)) {
-                    Write-Host "[$groupCounter/$($ValidGroups.Count)] Groups processed..." -ForegroundColor Cyan
+                # Show progress in quiet mode: early milestones (1, 5, 10, 20) then every 50
+                if ($quietMode) {
+                    if ($groupCounter -eq 1 -or $groupCounter -eq 5 -or $groupCounter -eq 10 -or $groupCounter -eq 20 -or ($groupCounter % 50 -eq 0)) {
+                        Write-Host "[$groupCounter/$($ValidGroups.Count)] Groups processed..." -ForegroundColor Cyan
+                    }
                 }
 
                 $successfulGroups += $group.Title
@@ -227,6 +229,7 @@ function Start-Migration {
 
             if ($quietMode) {
                 Write-Host "⏳ Setting ownership for $($successfulGroups.Count) groups..." -ForegroundColor Cyan
+                Write-Host "   Progress shown at: 1, 5, 10, 20, then every 50 groups." -ForegroundColor DarkGray
             }
 
             foreach ($group in $ValidGroups) {
@@ -250,9 +253,11 @@ function Start-Migration {
                         }
                         $ownershipSuccessCount++
 
-                        # Show progress in quiet mode
-                        if ($quietMode -and ($ownershipCounter % 50 -eq 0)) {
-                            Write-Host "[$ownershipCounter/$($successfulGroups.Count)] Ownership set..." -ForegroundColor Cyan
+                        # Show progress in quiet mode: early milestones (1, 5, 10, 20) then every 50
+                        if ($quietMode) {
+                            if ($ownershipCounter -eq 1 -or $ownershipCounter -eq 5 -or $ownershipCounter -eq 10 -or $ownershipCounter -eq 20 -or ($ownershipCounter % 50 -eq 0)) {
+                                Write-Host "[$ownershipCounter/$($successfulGroups.Count)] Ownership set..." -ForegroundColor Cyan
+                            }
                         }
                     }
                     catch {
@@ -597,7 +602,7 @@ function Get-GroupMembers {
 
     if ($quietMode) {
         Write-Host "`n⏳ Retrieving members for $($GroupNames.Count) groups..." -ForegroundColor Cyan
-        Write-Host "   This may take several minutes. Progress shown every 50 groups." -ForegroundColor DarkGray
+        Write-Host "   This may take several minutes. Progress shown at: 1, 5, 10, 20, then every 50 groups." -ForegroundColor DarkGray
     }
 
     foreach ($group in $GroupNames) {
@@ -616,9 +621,11 @@ function Get-GroupMembers {
             }
             $groupsMembers += $returnedMembers
 
-            # Show progress in quiet mode
-            if ($quietMode -and ($memberCounter % 50 -eq 0)) {
-                Write-Host "[$memberCounter/$($GroupNames.Count)] Group members retrieved..." -ForegroundColor Cyan
+            # Show progress in quiet mode: early milestones (1, 5, 10, 20) then every 50
+            if ($quietMode) {
+                if ($memberCounter -eq 1 -or $memberCounter -eq 5 -or $memberCounter -eq 10 -or $memberCounter -eq 20 -or ($memberCounter % 50 -eq 0)) {
+                    Write-Host "[$memberCounter/$($GroupNames.Count)] Group members retrieved..." -ForegroundColor Cyan
+                }
             }
         }
         catch {
@@ -1283,7 +1290,7 @@ function Get-GroupsPermissions {
 
     if ($quietMode) {
         Write-Host "`n⏳ Retrieving permissions for $($GroupNames.Count) groups..." -ForegroundColor Cyan
-        Write-Host "   This may take several minutes. Progress shown every 50 groups." -ForegroundColor DarkGray
+        Write-Host "   This may take several minutes. Progress shown at: 1, 5, 10, 20, then every 50 groups." -ForegroundColor DarkGray
     }
 
     # Get all permissions for each group
@@ -1305,9 +1312,11 @@ function Get-GroupsPermissions {
             $groupData += $returnedPerms
             $successfulGroupPermsAcquired += $group["Title"]
 
-            # Show progress in quiet mode
-            if ($quietMode -and ($permCounter % 50 -eq 0)) {
-                Write-Host "[$permCounter/$($GroupNames.Count)] Group permissions retrieved..." -ForegroundColor Cyan
+            # Show progress in quiet mode: early milestones (1, 5, 10, 20) then every 50
+            if ($quietMode) {
+                if ($permCounter -eq 1 -or $permCounter -eq 5 -or $permCounter -eq 10 -or $permCounter -eq 20 -or ($permCounter % 50 -eq 0)) {
+                    Write-Host "[$permCounter/$($GroupNames.Count)] Group permissions retrieved..." -ForegroundColor Cyan
+                }
             }
         }
         catch {
@@ -1361,6 +1370,7 @@ function New-GroupInDestination {
 
     if ($quietMode) {
         Write-Host "`n⏳ Extracting $($GroupsToCreate.Count) groups (quiet mode enabled)..." -ForegroundColor Cyan
+        Write-Host "   Progress shown at: 1, 5, 10, 20, then every 50 groups." -ForegroundColor DarkGray
     }
 
     $extractCounter = 0
@@ -1382,9 +1392,11 @@ function New-GroupInDestination {
             Write-Host "Extracted - Title: $($groupInfo.Title) | Owner: $($groupInfo.OwnerTitle)" -ForegroundColor Green
         }
 
-        # Show progress in quiet mode
-        if ($quietMode -and ($extractCounter % 50 -eq 0)) {
-            Write-Host "[$extractCounter/$($GroupsToCreate.Count)] Groups extracted..." -ForegroundColor Cyan
+        # Show progress in quiet mode: early milestones (1, 5, 10, 20) then every 50
+        if ($quietMode) {
+            if ($extractCounter -eq 1 -or $extractCounter -eq 5 -or $extractCounter -eq 10 -or $extractCounter -eq 20 -or ($extractCounter % 50 -eq 0)) {
+                Write-Host "[$extractCounter/$($GroupsToCreate.Count)] Groups extracted..." -ForegroundColor Cyan
+            }
         }
     }
 
