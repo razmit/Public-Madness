@@ -155,7 +155,8 @@ function Set-GroupToReadOnly {
             $currentPerms = Get-PnPGroupPermissions -Identity $GroupTitle -ErrorAction Stop
 
             foreach ($perm in $currentPerms) {
-                Remove-PnPGroupPermissions -Identity $GroupTitle -RemoveRole $perm.Name -ErrorAction Stop
+                # Correct cmdlet: Set-PnPGroupPermissions with -RemoveRole
+                Set-PnPGroupPermissions -Identity $GroupTitle -RemoveRole $perm.Name -ErrorAction Stop
             }
 
             # Add Read permission
