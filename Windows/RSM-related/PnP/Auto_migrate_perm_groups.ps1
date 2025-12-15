@@ -608,6 +608,13 @@ function Get-GroupMembers {
     foreach ($group in $GroupNames) {
         $memberCounter++
 
+        # Show progress BEFORE API call: early milestones (1, 5, 10, 20) then every 50
+        if ($quietMode) {
+            if ($memberCounter -eq 1 -or $memberCounter -eq 5 -or $memberCounter -eq 10 -or $memberCounter -eq 20 -or ($memberCounter % 50 -eq 0)) {
+                Write-Host "[$memberCounter/$($GroupNames.Count)] Processing group members..." -ForegroundColor Cyan
+            }
+        }
+
         try {
             $returnedMemberLoginName = Get-PnPGroupMember -Identity $group["Title"].ToString() | Select-Object -Property LoginName -ExpandProperty LoginName | Where-Object { $null -ne $_.LoginName }
 
@@ -620,13 +627,6 @@ function Get-GroupMembers {
                 Members = $returnedMemberLoginName ?? "n/a"
             }
             $groupsMembers += $returnedMembers
-
-            # Show progress in quiet mode: early milestones (1, 5, 10, 20) then every 50
-            if ($quietMode) {
-                if ($memberCounter -eq 1 -or $memberCounter -eq 5 -or $memberCounter -eq 10 -or $memberCounter -eq 20 -or ($memberCounter % 50 -eq 0)) {
-                    Write-Host "[$memberCounter/$($GroupNames.Count)] Group members retrieved..." -ForegroundColor Cyan
-                }
-            }
         }
         catch {
             Write-Host "Failed to get members for group: $($group["Title"]). Error: $($_.Exception.Message)" -ForegroundColor Red
@@ -1297,6 +1297,13 @@ function Get-GroupsPermissions {
     foreach ($group in $GroupNames) {
         $permCounter++
 
+        # Show progress BEFORE API call: early milestones (1, 5, 10, 20) then every 50
+        if ($quietMode) {
+            if ($permCounter -eq 1 -or $permCounter -eq 5 -or $permCounter -eq 10 -or $permCounter -eq 20 -or ($permCounter % 50 -eq 0)) {
+                Write-Host "[$permCounter/$($GroupNames.Count)] Processing group permissions..." -ForegroundColor Cyan
+            }
+        }
+
         try {
             $groupPermissions = Get-PnPGroupPermissions -Identity $group["Title"].ToString() | Select-Object -Property Name -ExpandProperty Name
 
@@ -1311,13 +1318,6 @@ function Get-GroupsPermissions {
             }
             $groupData += $returnedPerms
             $successfulGroupPermsAcquired += $group["Title"]
-
-            # Show progress in quiet mode: early milestones (1, 5, 10, 20) then every 50
-            if ($quietMode) {
-                if ($permCounter -eq 1 -or $permCounter -eq 5 -or $permCounter -eq 10 -or $permCounter -eq 20 -or ($permCounter % 50 -eq 0)) {
-                    Write-Host "[$permCounter/$($GroupNames.Count)] Group permissions retrieved..." -ForegroundColor Cyan
-                }
-            }
         }
         catch {
             write-Host "Get-GroupPermissions: Failed to get permissions for group: $($group["Title"]). Error: $($_.Exception.Message)" -ForegroundColor Red
