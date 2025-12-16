@@ -62,12 +62,44 @@ function Get-ExcelData {
     try {
         # Open Excel package to access hyperlinks
         $excelPackage = Open-ExcelPackage -Path $excelPath
-        $worksheet = $excelPackage.Workbook.Worksheets[0]
+
+        # Debug: Show worksheet information
+        Write-Host "`nWorkbook Information:" -ForegroundColor Cyan
+        Write-Host "  Total worksheets: $($excelPackage.Workbook.Worksheets.Count)" -ForegroundColor Gray
+
+        for ($i = 0; $i -lt $excelPackage.Workbook.Worksheets.Count; $i++) {
+            $ws = $excelPackage.Workbook.Worksheets[$i]
+            $wsName = $ws.Name
+            $wsDim = if ($ws.Dimension) { "$($ws.Dimension.Rows) rows x $($ws.Dimension.Columns) cols" } else { "No dimensions (empty)" }
+            Write-Host "  [$i] '$wsName' - $wsDim" -ForegroundColor Gray
+        }
+
+        # Try to find the worksheet with data
+        $worksheet = $null
+        $worksheetIndex = 0
+
+        # First, try to find a worksheet named similar to the table
+        foreach ($ws in $excelPackage.Workbook.Worksheets) {
+            if ($ws.Dimension -ne $null -and $ws.Dimension.Rows -gt 0) {
+                $worksheet = $ws
+                Write-Host "`nUsing worksheet: '$($ws.Name)'" -ForegroundColor Green
+                break
+            }
+            $worksheetIndex++
+        }
+
+        if ($null -eq $worksheet) {
+            Write-Host "`n✗ No worksheet with data found in the Excel file" -ForegroundColor Red
+            Close-ExcelPackage $excelPackage -NoSave
+            return $null
+        }
 
         # Get header row to find column indices
         $headers = @{}
-        $columnCount = $worksheet.Dimension.Columns
+        $columnCount = if ($worksheet.Dimension) { $worksheet.Dimension.Columns } else { 0 }
+        $rowCount = if ($worksheet.Dimension) { $worksheet.Dimension.Rows } else { 0 }
 
+        Write-Host "  Dimensions: $rowCount rows x $columnCount columns" -ForegroundColor Gray
         Write-Host "`nDetecting columns..." -ForegroundColor Gray
         for ($col = 1; $col -le $columnCount; $col++) {
             $headerValue = $worksheet.Cells[1, $col].Value
@@ -112,7 +144,6 @@ function Get-ExcelData {
 
         # Extract data with hyperlinks
         $excelData = @()
-        $rowCount = $worksheet.Dimension.Rows
 
         for ($row = 2; $row -le $rowCount; $row++) {
             $siteUrlCell = $worksheet.Cells[$row, $siteUrlCol]
