@@ -60,24 +60,73 @@ function Get-ExcelData {
     }
 
     try {
-        $excelData = Import-Excel -Path $excelPath
+        # Open Excel package to access hyperlinks
+        $excelPackage = Open-ExcelPackage -Path $excelPath
+        $worksheet = $excelPackage.Workbook.Worksheets[0]
+
+        # Get header row to find column indices
+        $headers = @{}
+        $columnCount = $worksheet.Dimension.Columns
+
+        for ($col = 1; $col -le $columnCount; $col++) {
+            $headerValue = $worksheet.Cells[1, $col].Value
+            if ($headerValue) {
+                $headers[$headerValue] = $col
+            }
+        }
 
         # Validate required columns
-        $firstRow = $excelData | Select-Object -First 1
-        $columns = $firstRow.PSObject.Properties.Name
-
-        if (-not ($columns -contains "New Users")) {
+        if (-not $headers.ContainsKey("New Users")) {
             Write-Host "✗ Excel file must contain a 'New Users' column" -ForegroundColor Red
+            Close-ExcelPackage $excelPackage -NoSave
             return $null
         }
 
-        if (-not ($columns -contains "Site URL")) {
+        if (-not $headers.ContainsKey("Site URL")) {
             Write-Host "✗ Excel file must contain a 'Site URL' column" -ForegroundColor Red
+            Close-ExcelPackage $excelPackage -NoSave
             return $null
         }
+
+        $siteUrlCol = $headers["Site URL"]
+        $newUsersCol = $headers["New Users"]
+
+        # Extract data with hyperlinks
+        $excelData = @()
+        $rowCount = $worksheet.Dimension.Rows
+
+        for ($row = 2; $row -le $rowCount; $row++) {
+            $siteUrlCell = $worksheet.Cells[$row, $siteUrlCol]
+            $userEmailCell = $worksheet.Cells[$row, $newUsersCol]
+
+            # Extract actual URL from hyperlink if it exists, otherwise use cell value
+            $siteUrl = if ($siteUrlCell.Hyperlink) {
+                $siteUrlCell.Hyperlink.AbsoluteUri
+            } else {
+                $siteUrlCell.Value
+            }
+
+            $userEmail = if ($userEmailCell.Hyperlink) {
+                $userEmailCell.Hyperlink.AbsoluteUri
+            } else {
+                $userEmailCell.Value
+            }
+
+            # Skip empty rows
+            if ([string]::IsNullOrWhiteSpace($siteUrl) -and [string]::IsNullOrWhiteSpace($userEmail)) {
+                continue
+            }
+
+            $excelData += [PSCustomObject]@{
+                "Site URL" = $siteUrl
+                "New Users" = $userEmail
+            }
+        }
+
+        Close-ExcelPackage $excelPackage -NoSave
 
         Write-Host "✓ Excel file loaded successfully" -ForegroundColor Green
-        Write-Host "  Found $($excelData.Count) row(s)" -ForegroundColor Gray
+        Write-Host "  Found $($excelData.Count) row(s) with hyperlinks properly extracted" -ForegroundColor Gray
 
         return $excelData
 
@@ -145,20 +194,6 @@ function Get-ManualData {
     return $manualData
 }
 
-function Extract-UrlFromHyperlink {
-    param([string]$urlString)
-
-    # Check if it's a hyperlink format (Excel sometimes stores as "DisplayText#URL")
-    if ($urlString -match '#') {
-        $parts = $urlString -split '#'
-        if ($parts.Count -gt 1) {
-            return $parts[1]
-        }
-    }
-
-    return $urlString
-}
-
 function Process-UserAdditions {
     param([array]$data)
 
@@ -177,10 +212,9 @@ function Process-UserAdditions {
     $groupedBySite = $data | Group-Object -Property "Site URL"
 
     foreach ($siteGroup in $groupedBySite) {
-        $rawSiteUrl = $siteGroup.Name
-        $siteUrl = Extract-UrlFromHyperlink -urlString $rawSiteUrl
+        $siteUrl = $siteGroup.Name
 
-        # Clean and validate URL
+        # Clean and validate URL (in case it's just a site name)
         if ($siteUrl -notmatch "^https://") {
             $siteUrl = "$tenantUrl/sites/$siteUrl"
         }
