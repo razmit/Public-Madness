@@ -68,28 +68,47 @@ function Get-ExcelData {
         $headers = @{}
         $columnCount = $worksheet.Dimension.Columns
 
+        Write-Host "`nDetecting columns..." -ForegroundColor Gray
         for ($col = 1; $col -le $columnCount; $col++) {
             $headerValue = $worksheet.Cells[1, $col].Value
             if ($headerValue) {
-                $headers[$headerValue] = $col
+                # Trim spaces for cleaner matching
+                $cleanHeader = $headerValue.ToString().Trim()
+                $headers[$cleanHeader] = $col
+                Write-Host "  Column $col : '$cleanHeader'" -ForegroundColor Gray
             }
         }
 
-        # Validate required columns
-        if (-not $headers.ContainsKey("New Users")) {
-            Write-Host "✗ Excel file must contain a 'New Users' column" -ForegroundColor Red
+        Write-Host "`nFound $($headers.Count) column(s)" -ForegroundColor Gray
+        Write-Host ""
+
+        # Find required columns (case-insensitive)
+        $siteUrlCol = $null
+        $newUsersCol = $null
+
+        foreach ($key in $headers.Keys) {
+            if ($key -match "^Site\s*URL$" -or $key -eq "Site URL") {
+                $siteUrlCol = $headers[$key]
+                Write-Host "✓ Found Site URL column: $key" -ForegroundColor Green
+            }
+            if ($key -match "^New\s*Users?$" -or $key -eq "New Users" -or $key -eq "New User") {
+                $newUsersCol = $headers[$key]
+                Write-Host "✓ Found New Users column: $key" -ForegroundColor Green
+            }
+        }
+
+        # Validate required columns were found
+        if ($null -eq $newUsersCol) {
+            Write-Host "`n✗ Excel file must contain a 'New Users' or 'New User' column" -ForegroundColor Red
             Close-ExcelPackage $excelPackage -NoSave
             return $null
         }
 
-        if (-not $headers.ContainsKey("Site URL")) {
-            Write-Host "✗ Excel file must contain a 'Site URL' column" -ForegroundColor Red
+        if ($null -eq $siteUrlCol) {
+            Write-Host "`n✗ Excel file must contain a 'Site URL' column" -ForegroundColor Red
             Close-ExcelPackage $excelPackage -NoSave
             return $null
         }
-
-        $siteUrlCol = $headers["Site URL"]
-        $newUsersCol = $headers["New Users"]
 
         # Extract data with hyperlinks
         $excelData = @()
