@@ -244,6 +244,25 @@ function Get-ManualData {
     return $manualData
 }
 
+function Clean-SharePointUrl {
+    param([string]$url)
+
+    # Remove common SharePoint page paths to get the root site URL
+    # Patterns to remove: /pages/, /SitePages/, /Lists/, /Shared Documents/, /_layouts/, etc.
+    $cleanedUrl = $url -replace '/pages/.*$', '' `
+                       -replace '/SitePages/.*$', '' `
+                       -replace '/Lists/.*$', '' `
+                       -replace '/Shared%20Documents/.*$', '' `
+                       -replace '/_layouts/.*$', '' `
+                       -replace '/Forms/.*$', '' `
+                       -replace '\.aspx.*$', ''
+
+    # Remove trailing slashes
+    $cleanedUrl = $cleanedUrl.TrimEnd('/')
+
+    return $cleanedUrl
+}
+
 function Process-UserAdditions {
     param([array]$data)
 
@@ -262,15 +281,23 @@ function Process-UserAdditions {
     $groupedBySite = $data | Group-Object -Property "Site URL"
 
     foreach ($siteGroup in $groupedBySite) {
-        $siteUrl = $siteGroup.Name
+        $rawSiteUrl = $siteGroup.Name
 
-        # Clean and validate URL (in case it's just a site name)
+        # Clean the URL to remove page paths
+        $siteUrl = Clean-SharePointUrl -url $rawSiteUrl
+
+        # Validate URL format (in case it's just a site name)
         if ($siteUrl -notmatch "^https://") {
             $siteUrl = "$tenantUrl/sites/$siteUrl"
         }
 
         Write-Host "`n----------------------------------------" -ForegroundColor Cyan
-        Write-Host "Site: $siteUrl" -ForegroundColor Cyan
+        if ($rawSiteUrl -ne $siteUrl) {
+            Write-Host "Original URL: $rawSiteUrl" -ForegroundColor Gray
+            Write-Host "Cleaned to: $siteUrl" -ForegroundColor Yellow
+        } else {
+            Write-Host "Site: $siteUrl" -ForegroundColor Cyan
+        }
         Write-Host "----------------------------------------" -ForegroundColor Cyan
 
         # Connect to the site
