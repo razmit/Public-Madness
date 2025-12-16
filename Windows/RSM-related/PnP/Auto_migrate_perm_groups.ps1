@@ -1062,7 +1062,7 @@ function Export-PermissionsToCSV {
     param (
         [string]$SiteUrl,
         [string]$SiteName,
-        [string]$OutputPath = "C:\Users\E095713\Downloads\SiteCollection-Reports\zAuditTrail"
+        [string]$OutputPath = "C:\Users\$($env:USERNAME)\Downloads\SiteCollection-Reports\zAuditTrail"
     )
 
     Write-Host "`n=== Exporting Permissions to CSV ===" -ForegroundColor Cyan
@@ -2079,7 +2079,7 @@ function Get-ManualSiteUrls {
 $todayDate = Get-Date -Format "dd-MM-yyyy"
 
 # Expected path of file
-$pathToCheck = "C:\Users\E095713\Downloads\SiteCollection-Reports\SiteCollections-TenantWide-$($todayDate).csv" 
+$pathToCheck = "C:\Users\$($env:USERNAME)\Downloads\SiteCollection-Reports\SiteCollections-TenantWide-$($todayDate).csv" 
 
 # Check to see if today's file already exists
 if (Test-Path -Path $pathToCheck) {
@@ -2135,7 +2135,7 @@ $menu = @'
 |                    ⠈⣿⣆⡀⠀⠀⠀⠀⠀⠀⢀⣠⣴⡾⠃⠀              |  
 |                  ⠀⠀⠈⠛⠻⢿⣿⣾⣿⡿⠿⠟⠋⠁⠀⠀⠀               |
 |                                                  |
-|              MIGRATION-MAN v2.0                  |
+|              MIGRATION-MAN v2.12                  |
 |                                                  |
 |  Welcome to Migration-Man, your SharePoint       |
 |  migration magician.                             |
@@ -2210,7 +2210,7 @@ do {
             Write-Host "`nUsing CSV site selection..." -ForegroundColor Cyan
 
             # Get the latest created CSV file
-            $latestFile = Get-ChildItem -Path "C:\Users\E095713\Downloads\SiteCollection-Reports\" -Attributes !D *.* | Sort-Object -Descending -Property CreationTime | Select-Object -First 1 -ExpandProperty FullName
+            $latestFile = Get-ChildItem -Path "C:\Users\$($env:USERNAME)\Downloads\SiteCollection-Reports\" -Attributes !D *.* | Sort-Object -Descending -Property CreationTime | Select-Object -First 1 -ExpandProperty FullName
 
             # Variable to store the selected SOURCE site
             $resultOfSearchingForSourceSite = Get-SearchedSourceSite -CSVFileOfSites $latestFile
