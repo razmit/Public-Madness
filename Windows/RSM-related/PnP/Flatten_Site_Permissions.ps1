@@ -359,7 +359,7 @@ function Reset-ItemInheritance {
                 }
                 else {
                     # For folders and files
-                    Set-PnPListItemPermission -List $item.ListId -Identity $item.ItemId -ResetRoleInheritance
+                    Set-PnPListItemPermission -List $item.ListId -Identity $item.ItemId -InheritPermissions
                     Write-Host "[$($item.Type)] $($item.Title) - INHERITANCE RESET" -ForegroundColor Green
                 }
 
