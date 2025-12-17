@@ -268,51 +268,8 @@ function Repair-AssociatedOwnerGroup {
     $ownerGroup = $GroupsInfo.OwnerGroup
 
     try {
-        # Step 1: Remove ALL existing permissions from the owner group
-        Write-Host "Step 1: Clearing existing permissions from owner group..." -ForegroundColor Yellow
-
-        if (-not $DryRun) {
-            try {
-                # Get current permissions
-                $currentPerms = Get-GroupPermissions -GroupId $ownerGroup.Id
-
-                if ($currentPerms.Count -gt 0) {
-                    # Remove all role assignments for this group
-                    $web = Get-PnPWeb
-                    $ctx = Get-PnPContext
-                    $ctx.Load($web.RoleAssignments)
-                    $ctx.ExecuteQuery()
-
-                    foreach ($roleAssignment in $web.RoleAssignments) {
-                        $ctx.Load($roleAssignment.Member)
-                        $ctx.ExecuteQuery()
-
-                        if ($roleAssignment.Member.Id -eq $ownerGroup.Id) {
-                            $roleAssignment.DeleteObject()
-                            $ctx.ExecuteQuery()
-                            Write-Host "  Removed existing permissions" -ForegroundColor Gray
-                            break
-                        }
-                    }
-                }
-            }
-            catch {
-                Write-Host "  Warning: Could not remove existing permissions - $($_.Exception.Message)" -ForegroundColor DarkYellow
-            }
-        }
-        else {
-            Write-Host "  [DRY-RUN] Would remove existing permissions" -ForegroundColor Cyan
-        }
-
-        $repairLog += [PSCustomObject]@{
-            Step = "1"
-            Action = "Clear existing permissions"
-            Status = "Completed"
-            Details = "Removed all permissions from owner group"
-        }
-
-        # Step 2: Re-associate the owner group at the web level
-        Write-Host "`nStep 2: Re-associating owner group at web level..." -ForegroundColor Yellow
+        # Step 1: Re-associate the owner group at the web level
+        Write-Host "Step 1: Re-associating owner group at web level..." -ForegroundColor Yellow
 
         if (-not $DryRun) {
             $web = Get-PnPWeb
@@ -330,32 +287,39 @@ function Repair-AssociatedOwnerGroup {
         }
 
         $repairLog += [PSCustomObject]@{
-            Step = "2"
+            Step = "1"
             Action = "Re-associate owner group"
             Status = "Completed"
             Details = "Set $($ownerGroup.Title) as AssociatedOwnerGroup"
         }
 
-        # Step 3: Grant Full Control to the owner group
-        Write-Host "`nStep 3: Granting Full Control permissions..." -ForegroundColor Yellow
+        # Step 2: Ensure Full Control permissions are present
+        Write-Host "`nStep 2: Ensuring Full Control permissions..." -ForegroundColor Yellow
 
         if (-not $DryRun) {
-            Set-PnPGroupPermissions -Identity $ownerGroup.Id -AddRole "Full Control"
-            Write-Host "  Full Control granted" -ForegroundColor Green
+            # Check if Full Control already exists
+            $currentPerms = Get-GroupPermissions -GroupId $ownerGroup.Id
+            if ($currentPerms -contains "Full Control") {
+                Write-Host "  Full Control already present" -ForegroundColor Gray
+            }
+            else {
+                Set-PnPGroupPermissions -Identity $ownerGroup.Id -AddRole "Full Control"
+                Write-Host "  Full Control granted" -ForegroundColor Green
+            }
         }
         else {
-            Write-Host "  [DRY-RUN] Would grant Full Control" -ForegroundColor Cyan
+            Write-Host "  [DRY-RUN] Would ensure Full Control is present" -ForegroundColor Cyan
         }
 
         $repairLog += [PSCustomObject]@{
-            Step = "3"
-            Action = "Grant Full Control"
+            Step = "2"
+            Action = "Ensure Full Control"
             Status = "Completed"
-            Details = "Assigned Full Control permission level"
+            Details = "Ensured Full Control permission level is present"
         }
 
-        # Step 4: Ensure the group is set as the Owner of itself (best practice)
-        Write-Host "`nStep 4: Setting owner group as its own owner..." -ForegroundColor Yellow
+        # Step 3: Ensure the group is set as the Owner of itself (best practice)
+        Write-Host "`nStep 3: Setting owner group as its own owner..." -ForegroundColor Yellow
 
         if (-not $DryRun) {
             try {
@@ -371,14 +335,14 @@ function Repair-AssociatedOwnerGroup {
         }
 
         $repairLog += [PSCustomObject]@{
-            Step = "4"
+            Step = "3"
             Action = "Configure group ownership"
             Status = "Completed"
             Details = "Set group as its own owner"
         }
 
-        # Step 5: Verify the fix
-        Write-Host "`nStep 5: Verifying repair..." -ForegroundColor Yellow
+        # Step 4: Verify the fix
+        Write-Host "`nStep 4: Verifying repair..." -ForegroundColor Yellow
 
         if (-not $DryRun) {
             Start-Sleep -Seconds 2  # Give SharePoint a moment to propagate changes
@@ -388,7 +352,7 @@ function Repair-AssociatedOwnerGroup {
             if ($verifyPerms -contains "Full Control") {
                 Write-Host "  ✓ Verification successful - Full Control confirmed" -ForegroundColor Green
                 $repairLog += [PSCustomObject]@{
-                    Step = "5"
+                    Step = "4"
                     Action = "Verification"
                     Status = "SUCCESS"
                     Details = "Full Control verified"
@@ -397,7 +361,7 @@ function Repair-AssociatedOwnerGroup {
             else {
                 Write-Host "  ⚠ Verification warning - Full Control not detected" -ForegroundColor Yellow
                 $repairLog += [PSCustomObject]@{
-                    Step = "5"
+                    Step = "4"
                     Action = "Verification"
                     Status = "WARNING"
                     Details = "Could not verify Full Control"
@@ -407,7 +371,7 @@ function Repair-AssociatedOwnerGroup {
         else {
             Write-Host "  [DRY-RUN] Would verify Full Control permissions" -ForegroundColor Cyan
             $repairLog += [PSCustomObject]@{
-                Step = "5"
+                Step = "4"
                 Action = "Verification"
                 Status = "DRY-RUN"
                 Details = "Would verify permissions"
@@ -539,10 +503,10 @@ function Start-OwnerGroupRepair {
     Write-Host "╚════════════════════════════════════════════════════════╝" -ForegroundColor Yellow
     Write-Host "Do you want to proceed with repairing the owner group?" -ForegroundColor Yellow
     Write-Host "This will:" -ForegroundColor White
-    Write-Host "  1. Remove existing permissions from owner group" -ForegroundColor White
-    Write-Host "  2. Re-associate the group at web level" -ForegroundColor White
-    Write-Host "  3. Grant Full Control permissions" -ForegroundColor White
-    Write-Host "  4. Configure group ownership" -ForegroundColor White
+    Write-Host "  1. Re-associate the owner group at web level" -ForegroundColor White
+    Write-Host "  2. Ensure Full Control permissions are present" -ForegroundColor White
+    Write-Host "  3. Configure group ownership" -ForegroundColor White
+    Write-Host "  4. Verify the repair" -ForegroundColor White
     Write-Host "`nType 'YES' to proceed, or anything else to cancel" -ForegroundColor Yellow
     $confirmation = Read-Host "Proceed"
 
