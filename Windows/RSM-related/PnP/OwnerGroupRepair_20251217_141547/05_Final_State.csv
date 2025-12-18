@@ -1,0 +1,4 @@
+"GroupType","GroupTitle","Permissions","HasFullControl"
+"Owner","WPs Admin Owners","","False"
+"Member","WPs Admin Members","Edit","False"
+"Visitor","WPs Admin Visitors","Read","False"

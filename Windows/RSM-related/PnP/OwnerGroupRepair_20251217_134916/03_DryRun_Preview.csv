@@ -1,0 +1,6 @@
+"Step","Action","Status","Details"
+"1","Clear existing permissions","Completed","Removed all permissions from owner group"
+"2","Re-associate owner group","Completed","Set WPs Admin Owners as AssociatedOwnerGroup"
+"3","Grant Full Control","Completed","Assigned Full Control permission level"
+"4","Configure group ownership","Completed","Set group as its own owner"
+"5","Verification","DRY-RUN","Would verify permissions"

@@ -1,0 +1,2 @@
+"Step","Action","Status","Details"
+"ERROR","Repair process","FAILED","Exception calling ""ExecuteQuery"" with ""0"" argument(s): ""Access is denied. (Exception from HRESULT: 0x80070005 (E_ACCESSDENIED))"""
