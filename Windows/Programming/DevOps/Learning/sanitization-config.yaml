@@ -1,0 +1,27 @@
+# Sanitization rules for PS Scripts
+# Format: "actual_value": "replacement_value"
+
+replacements:
+  # Company identifiers
+  RSM: COMPANY_NAME
+  rsmus: company
+  rsmnet: companynet
+  mcgladrey: company_old
+  
+  # SharePoint URLs
+  rsmnet.sharepoint.com: companynet.sharepoint.com
+  
+  # Client IDs
+  f6666fe0-04e6-419a-b4bb-4025060af8f5: CLIENT_ID
+  
+  # Internal URLs (domains only - preserves paths)
+  dash.rsmus.com: dashboard.company.com
+  secret.mcgladrey.rsm.net: secrets.companynet.com
+  sso.rsmus.com: sso.company.com
+
+# File patterns to process
+file_patterns:
+  - "**/*.ps1"
+  
+# Output directory for sanitized scripts
+output_directory: sanitized_scripts
