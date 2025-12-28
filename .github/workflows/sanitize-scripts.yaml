@@ -1,0 +1,44 @@
+name: Sanitize PowerShell Scripts
+
+on:
+    push:
+        branches:
+            - main
+        paths:
+            - 'Windows/**/*.ps1'
+            - 'Windows/Programming/DevOps/Learning/sanitized.py'
+            - 'Windows/Programming/DevOps/Learning/sanitization-config.yaml'
+    workflow_dispatch:
+        
+jobs:
+    sanitize:
+        runs-on: ubuntu-latest
+        
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+                
+            - name: Set up Python
+              uses: actions/setup-python@v5
+              with:
+                  python-version: '3.11'
+                  
+            - name: Install dependencies
+              run: pip install pyyaml
+              
+            - name: Run sanitization script
+              run: |
+                echo "Sanitizing PowerShell scripts..."
+                python Windows/Programming/DevOps/Learning/sanitized.py 
+                
+            - name: Verify sanitized output
+              run: |
+                echo "Sanitized scripts in output directory:"
+                ls -lh Windows/Programming/DevOps/Learning/sanitized-scripts/
+                
+            - name: Upload sanitized scripts as artifacts
+              uses: actions/upload-artifact@v4
+              with:
+                  name: sanitized-powershell-scripts-{{ github.run_id }}
+                  path: Windows/Programming/DevOps/Learning/sanitized-scripts/
+                  retention-days: 7

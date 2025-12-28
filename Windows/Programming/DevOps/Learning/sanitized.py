@@ -1,11 +1,29 @@
 import yaml
 import os
 from pathlib import Path
+import argparse
+
+# === CONFIGURATION: Script location awareness ===
+
+# Get directory of where this script lives
+SCRIPT_DIR = Path(__file__).parent.resolve()
+
+# Get location of the root of the repo
+REPO_ROOT = SCRIPT_DIR.parents[4]
+
+# Load config relative to script location
+CONFIG_FILE = SCRIPT_DIR / 'sanitization-config.yaml'
 
 def load_config(config_file):
     """ Load the YAML configuration file. """
     with open(config_file, 'r') as file:
-        return yaml.safe_load(file)
+        config = yaml.safe_load(file)
+        
+    # Make paths absolute if they're relative
+    if not Path(config['output_directory']).is_absolute():
+        config['output_directory'] = str(SCRIPT_DIR / config['output_directory'])
+        
+    return config
     
 def sanitize_content(content, replacements):
     """ Apply all replacements to the content. """
@@ -59,12 +77,20 @@ def sanitize_file(input_file, output_dir, replacements):
 # ============================================================================
 
 if __name__ == "__main__":
+    
+    parser = argparse.ArgumentParser(description="Sanitize PowerShell Scripts")
+    parser.add_argument('--config', default=str(CONFIG_FILE), help="Path to config file (absolute)")
+    parser.add_argument('--input-dir', default=str(REPO_ROOT / 'Windows'), help="Directory containing PowerShell scripts to sanitize")
+    parser.add_argument('--output-dir', help="Override output directory from config file")
+    
+    args = parser.parse_args()
+    
     print("=" * 60)
     print(" PowerShell Script Sanitization Tool ")
     print("=" * 60)
     
     # Load configuration
-    config = load_config('sanitization-config.yaml')
+    config = load_config(args.config)
     replacements = config['replacements']
     output_dir = config['output_directory']
     
