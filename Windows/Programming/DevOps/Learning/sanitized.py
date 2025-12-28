@@ -9,7 +9,7 @@ import argparse
 SCRIPT_DIR = Path(__file__).parent.resolve()
 
 # Get location of the root of the repo
-REPO_ROOT = SCRIPT_DIR.parents[4]
+REPO_ROOT = SCRIPT_DIR.parents[3]
 
 # Load config relative to script location
 CONFIG_FILE = SCRIPT_DIR / 'sanitization-config.yaml'
@@ -80,7 +80,7 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description="Sanitize PowerShell Scripts")
     parser.add_argument('--config', default=str(CONFIG_FILE), help="Path to config file (absolute)")
-    parser.add_argument('--input-dir', default=str(REPO_ROOT / 'Windows'), help="Directory containing PowerShell scripts to sanitize")
+    parser.add_argument('--input-dir', default=str(REPO_ROOT / 'Windows/RSM-related/PnP'), help="Directory containing PowerShell scripts to sanitize")
     parser.add_argument('--output-dir', help="Override output directory from config file")
     
     args = parser.parse_args()
@@ -98,7 +98,7 @@ if __name__ == "__main__":
     print(f"Output directory: {output_dir}.")
     
     # Iterate through files to sanitize
-    base_dir = Path('C:\\Users\\E095713\\Documents\\Programming\\PowerShell\\my-scripts\\Windows\\RSM-related\\PnP')
+    base_dir = REPO_ROOT / 'Windows/RSM-related/PnP'
     
     for item in os.listdir(base_dir):
             
