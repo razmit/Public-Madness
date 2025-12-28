@@ -83,6 +83,7 @@ if __name__ == "__main__":
         file_extension = Path(item).suffix
         # print("File extension:", file_extension if file_extension else "N/A")
         
+        # Confirm only PowerShell files are processed
         if file_extension.lower() != '.ps1':
             continue
         else:
