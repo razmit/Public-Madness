@@ -39,6 +39,6 @@ jobs:
             - name: Upload sanitized scripts as artifacts
               uses: actions/upload-artifact@v4
               with:
-                  name: sanitized-powershell-scripts-{{ github.run_id }}
+                  name: sanitized-powershell-scripts-${{ github.sha }}
                   path: Windows/Programming/DevOps/Learning/sanitized_scripts/
                   retention-days: 7
