@@ -29,7 +29,7 @@ jobs:
             - name: Run sanitization script
               run: |
                 echo "Sanitizing PowerShell scripts..."
-                python Windows/Programming/DevOps/Learning/sanitize.py
+                python Windows/Programming/DevOps/Learning/sanitized.py
                 
             - name: Verify sanitized output
               run: |
