@@ -49,7 +49,7 @@ jobs:
               run: |
                 # Create category directories if they don't exist
                 mkdir -p portfolio-repo/PowerShell/SharePoint-Administration
-                mkdir -p portfolio-repo/PowerShell/Windows-Automation
+                mkdir -p portfolio-repo/PowerShell/Windows-Administration
                 
                 SANITIZED_DIR="Windows/Programming/DevOps/Learning/sanitized_scripts"
                 
@@ -64,10 +64,10 @@ jobs:
                     echo " → SharePoint: $filename"
                     cp "$file" portfolio-repo/PowerShell/SharePoint-Administration/
                     
-                  # Check if it's Windows automation
+                  # Check if it's Windows administration
                   elif echo "$filename" | grep -qE "(basic_new_hire|AutomateVPN|Pin_program|Windows_)"; then
-                    echo " → Windows Automation: $filename"
-                    cp "$file" portfolio-repo/PowerShell/Windows-Automation/
+                    echo " → Windows Administration: $filename"
+                    cp "$file" portfolio-repo/PowerShell/Windows-Administration/
                   
                   # By default, send to SharePoint since most are for that
                   else
@@ -81,7 +81,7 @@ jobs:
                 echo "SharePoint scripts:"
                 ls -1 portfolio-repo/PowerShell/SharePoint-Administration/ | wc -L
                 echo "Windows scripts:"
-                ls -1 portfolio-repo/PowerShell/Windows-Automation/ | wc -L
+                ls -1 portfolio-repo/PowerShell/Windows-Administration/ | wc -L
               
             - name: Commit and push changes to portfolio
               run: |
@@ -97,7 +97,7 @@ jobs:
                 else
                   # Count the files for commit message
                   SHAREPOINT_COUNT=$(ls -1 PowerShell/SharePoint-Administration/*.ps1 2>/dev/null | wc -l)
-                  WINDOWS_COUNT=$(ls -1 PowerShell/Windows-Automation/*.ps1 2>/dev/null | wc -l)
+                  WINDOWS_COUNT=$(ls -1 PowerShell/Windows-Administration/*.ps1 2>/dev/null | wc -l)
                   
                   git commit -m "Update PowerShell portfolio scripts: 
                     📁 SharePoint Admin: $SHAREPOINT_COUNT scripts
