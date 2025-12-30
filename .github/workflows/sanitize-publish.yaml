@@ -65,7 +65,7 @@ jobs:
                     cp "$file" portfolio-repo/PowerShell/SharePoint-Administration/
                     
                   # Check if it's Windows automation
-                  if echo "$filename" | grep -qE "(basic_new_hire|AutomateVPN|Pin_program|Windows_)"; then
+                  elif echo "$filename" | grep -qE "(basic_new_hire|AutomateVPN|Pin_program|Windows_)"; then
                     echo " → Windows Automation: $filename"
                     cp "$file" portfolio-repo/PowerShell/Windows-Automation/
                   
