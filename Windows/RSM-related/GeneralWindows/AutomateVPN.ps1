@@ -39,3 +39,6 @@ if ($statusVPNService = "Running") {
 if ($currentTimeHour -in $deactivationHours) {
     
 }
+
+
+# THIS IS A TEST CHANGE I WANT TO SEE IF IT WORKS
