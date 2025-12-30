@@ -80,7 +80,7 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description="Sanitize PowerShell Scripts")
     parser.add_argument('--config', default=str(CONFIG_FILE), help="Path to config file (absolute)")
-    parser.add_argument('--input-dir', default=str(REPO_ROOT / 'Windows/RSM-related/PnP'), help="Directory containing PowerShell scripts to sanitize")
+    parser.add_argument('--input-dir', default=str(REPO_ROOT / 'Windows/RSM-related/'), help="Directory containing PowerShell scripts to sanitize")
     parser.add_argument('--output-dir', help="Override output directory from config file")
     
     args = parser.parse_args()
@@ -98,7 +98,7 @@ if __name__ == "__main__":
     print(f"Output directory: {output_dir}.")
     
     # Iterate through files to sanitize
-    base_dir = REPO_ROOT / 'Windows/RSM-related/PnP'
+    base_dir = REPO_ROOT / 'Windows/RSM-related/'
     
     for item in os.listdir(base_dir):
             
