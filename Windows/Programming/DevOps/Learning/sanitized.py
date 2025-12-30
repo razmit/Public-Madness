@@ -98,24 +98,31 @@ if __name__ == "__main__":
     print(f"Output directory: {output_dir}.")
     
     # Iterate through files to sanitize
-    base_dir = REPO_ROOT / 'Windows/RSM-related/'
+    base_dir = REPO_ROOT / 'Windows/RSM-related'
     
-    for item in os.listdir(base_dir):
+    print(f"\n📂 Scanning directory (recursive): {base_dir}")
+    
+    for ps1_file in base_dir.rglob('*.ps1'):
+        print(f"Processing file: {ps1_file.name}")
+        sanitize_file(str(ps1_file), output_dir, replacements)
+    
+    
+    # for item in os.listdir(base_dir):
             
-        full_item_path = os.path.join(base_dir, item)
+    #     full_item_path = os.path.join(base_dir, item)
             
-        # print(f"\n{"File - " + item + "\nFull path: " + full_item_path if os.path.isfile (os.path.join(base_dir, item)) else "Directory" if os.path.isdir(os.path.join(base_dir, item)) else "Unknown"}")
+    #     # print(f"\n{"File - " + item + "\nFull path: " + full_item_path if os.path.isfile (os.path.join(base_dir, item)) else "Directory" if os.path.isdir(os.path.join(base_dir, item)) else "Unknown"}")
         
-        file_extension = Path(item).suffix
-        # print("File extension:", file_extension if file_extension else "N/A")
+    #     file_extension = Path(item).suffix
+    #     # print("File extension:", file_extension if file_extension else "N/A")
         
-        # Confirm only PowerShell files are processed
-        if file_extension.lower() != '.ps1':
-            continue
-        else:
-            # Sanitize the test file
-            print(f"Processing file: {item}")
-            sanitize_file(full_item_path, output_dir, replacements)
+    #     # Confirm only PowerShell files are processed
+    #     if file_extension.lower() != '.ps1':
+    #         continue
+    #     else:
+    #         # Sanitize the test file
+    #         print(f"Processing file: {item}")
+    #         sanitize_file(full_item_path, output_dir, replacements)
     
     # # Harcoded test file
     # test_file = Path('C:\\Users\\E095713\\Documents\\Programming\\PowerShell\\my-scripts\\Windows\\RSM-related\\PnP\\Lock-SourceSite.ps1')
