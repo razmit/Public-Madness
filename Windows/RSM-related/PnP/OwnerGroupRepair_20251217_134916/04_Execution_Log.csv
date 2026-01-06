@@ -1,3 +1,0 @@
-"Step","Action","Status","Details"
-"1","Clear existing permissions","Completed","Removed all permissions from owner group"
-"ERROR","Repair process","FAILED","Exception calling ""ExecuteQuery"" with ""0"" argument(s): ""Access is denied. (Exception from HRESULT: 0x80070005 (E_ACCESSDENIED))"""

@@ -1,5 +1,0 @@
-"Step","Action","Status","Details"
-"1","Re-associate owner group","Completed","Set WPs Admin Owners as AssociatedOwnerGroup"
-"2","Ensure Full Control","Completed","Ensured Full Control permission level is present"
-"3","Configure group ownership","Completed","Set group as its own owner"
-"4","Verification","DRY-RUN","Would verify permissions"
