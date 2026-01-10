@@ -1,0 +1,84 @@
+@import '~@fluentui/react/dist/sass/References.scss';
+
+.helloWorld {
+  overflow: hidden;
+  padding: 1em;
+  color: "[theme:bodyText, default: #323130]";
+  color: var(--bodyText);
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+
+  &.teams {
+    font-family: $ms-font-family-fallbacks;
+  }
+}
+
+.welcome {
+  text-align: center;
+  margin-bottom: 2em;
+}
+
+.welcomeImage {
+  width: 100%;
+  max-width: 420px;
+}
+
+.itemList {
+  list-style: none;
+  padding: 0;
+  margin: 1em 0;
+}
+
+.item {
+  padding: 0.5em;
+  margin: 0.5em 0;
+  background: "[theme:neutralLighter, default: #f3f2f1]";
+  border-left: 3px solid "[theme:themePrimary, default: #0078d4]";
+  border-radius: 2px;
+}
+
+.modified {
+  color: "[theme:neutralSecondary, default: #605e5c]";
+  font-size: 0.9em;
+  font-style: italic;
+}
+
+.links {
+  list-style: none;
+  padding: 0;
+
+  li {
+    margin: 0.5em 0;
+  }
+
+  a {
+    color: "[theme:themePrimary, default: #0078d4]";
+    text-decoration: none;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+}
+
+.button {
+  background-color: "[theme:themePrimary, default: #0078d4]";
+  color: white;
+  border: none;
+  padding: 0.5em 1.5em;
+  border-radius: 2px;
+  cursor: pointer;
+  font-size: 1em;
+  margin-top: 1em;
+
+  &:hover {
+    background-color: "[theme:themeDarkAlt, default: #106ebe]";
+  }
+}
+
+.error {
+  color: #a4262c;
+  background: #fde7e9;
+  padding: 1em;
+  border-left: 3px solid #a4262c;
+  margin: 1em 0;
+}

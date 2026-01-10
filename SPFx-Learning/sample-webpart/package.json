@@ -1,0 +1,42 @@
+{
+  "name": "spfx-sample-webpart",
+  "version": "0.0.1",
+  "private": true,
+  "engines": {
+    "node": ">=22.0.0 <23.0.0"
+  },
+  "scripts": {
+    "build": "heft build --production",
+    "clean": "heft clean",
+    "test": "heft test",
+    "serve": "heft serve --debug",
+    "package": "heft package"
+  },
+  "dependencies": {
+    "@microsoft/sp-core-library": "1.22.0",
+    "@microsoft/sp-lodash-subset": "1.22.0",
+    "@microsoft/sp-office-ui-fabric-core": "1.22.0",
+    "@microsoft/sp-property-pane": "1.22.0",
+    "@microsoft/sp-webpart-base": "1.22.0",
+    "@pnp/core": "^4.0.0",
+    "@pnp/sp": "^4.0.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "tslib": "2.8.1"
+  },
+  "devDependencies": {
+    "@microsoft/eslint-config-spfx": "1.22.0",
+    "@microsoft/eslint-plugin-spfx": "1.22.0",
+    "@microsoft/rush-stack-compiler-4.7": "0.1.0",
+    "@microsoft/sp-build-web": "1.22.0",
+    "@microsoft/sp-module-interfaces": "1.22.0",
+    "@rushstack/eslint-config": "4.0.1",
+    "@rushstack/heft": "0.68.1",
+    "@rushstack/heft-web-rig": "0.19.1",
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "@types/webpack-env": "~1.18.5",
+    "eslint": "8.57.1",
+    "typescript": "5.8.3"
+  }
+}
