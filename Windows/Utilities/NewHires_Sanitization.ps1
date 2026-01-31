@@ -25,6 +25,111 @@
 #   - Will detect if another instance of this script is already running to avoid conflicts.
 #
 
+# Sanitizes the raw Workday Excel file by:
+#   1. Removing the first 9 rows (Workday report metadata/filters)
+#   2. Using row 10 as headers
+#   3. Filtering for El Salvador location ("SLV-San Salvador*")
+#   4. Filtering for future hire dates only (Latest Hire Date > today)
+#   5. Exporting to a clean, formatted Excel file
+function Sanitize-NewHireReport {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath
+    )
+
+    Write-Host "`nStarting sanitization of: $FilePath" -ForegroundColor Cyan
+
+    # --------------------------------------------------------------------------
+    # STEP 1: Import the raw Excel data, skipping the first 9 metadata rows
+    # --------------------------------------------------------------------------
+    # The -StartRow parameter tells ImportExcel which row contains the headers.
+    # In the raw Workday file:
+    #   - Rows 1-9: Report metadata (title, filters, parameters)
+    #   - Row 10: Actual column headers
+    #   - Row 11+: Data
+    # So we use StartRow = 10 to treat row 10 as headers.
+
+    $rawData = Import-Excel -Path $FilePath -StartRow 10
+
+    # Quick validation: ensure we got data
+    if ($null -eq $rawData -or $rawData.Count -eq 0) {
+        Write-Host "ERROR: No data found after removing metadata rows. Check the file structure." -ForegroundColor Red
+        return $null
+    }
+
+    Write-Host "  Imported $($rawData.Count) rows (after skipping metadata)" -ForegroundColor Gray
+
+    # --------------------------------------------------------------------------
+    # STEP 2: Filter by Location - keep only "SLV-San Salvador*"
+    # --------------------------------------------------------------------------
+    # The -like operator with wildcard (*) matches any string starting with
+    # "SLV-San Salvador" regardless of what comes after.
+
+    $filteredByLocation = $rawData | Where-Object {
+        $_."Location Proposed" -like "SLV-San Salvador*"
+    }
+
+    Write-Host "  After location filter (SLV-San Salvador*): $($filteredByLocation.Count) rows" -ForegroundColor Gray
+
+    # --------------------------------------------------------------------------
+    # STEP 3: Filter by Date - keep only future hire dates
+    # --------------------------------------------------------------------------
+    # We compare "Latest Hire Date" against today's date.
+    # The [datetime] cast converts the Excel date value to a comparable date.
+    # We use .Date on both sides to compare dates without time components.
+
+    $today = (Get-Date).Date
+
+    $filteredData = $filteredByLocation | Where-Object {
+        # Handle potential null/empty dates gracefully
+        if ($_."Latest Hire Date") {
+            try {
+                $hireDate = [datetime]$_."Latest Hire Date"
+                return $hireDate.Date -gt $today
+            }
+            catch {
+                # If date parsing fails, exclude this row
+                return $false
+            }
+        }
+        return $false
+    }
+
+    Write-Host "  After date filter (future dates only): $($filteredData.Count) rows" -ForegroundColor Gray
+
+    # --------------------------------------------------------------------------
+    # STEP 4: Validate we have results
+    # --------------------------------------------------------------------------
+    if ($filteredData.Count -eq 0) {
+        Write-Host "WARNING: No records match the filters. No output file created." -ForegroundColor Yellow
+        return $null
+    }
+
+    # --------------------------------------------------------------------------
+    # STEP 5: Export to new sanitized Excel file
+    # --------------------------------------------------------------------------
+    # Build the output filename with today's date for easy identification
+    $outputFolder = "$env:USERPROFILE\Downloads\NewHires-Reports"
+    $todayFormatted = Get-Date -Format "yyyy-MM-dd"
+    $outputPath = "$outputFolder\NewHires_Sanitized_$todayFormatted.xlsx"
+
+    # Export with table formatting for a clean, professional look
+    # -AutoSize: Adjusts column widths to fit content
+    # -TableName: Creates a formatted Excel table (enables sorting/filtering in Excel)
+    # -TableStyle: Applies a predefined table style
+    $filteredData | Export-Excel -Path $outputPath `
+        -AutoSize `
+        -TableName "NewHires" `
+        -TableStyle Medium2 `
+        -FreezeTopRow
+
+    Write-Host "`nSanitized file created: $outputPath" -ForegroundColor Green
+    Write-Host "  Total records: $($filteredData.Count)" -ForegroundColor Green
+
+    return $outputPath
+}
+
+
 # Checks if the "NewHires-Reports" folder exists in the user's Downloads directory.
 function Confirm-ReportsFolderExists {
     
@@ -53,9 +158,9 @@ function Find-LatestRawReport {
     if(Test-Path "$downloadsPath\$todayFilePattern*.xlsx") {
         $latestFile = Get-ChildItem -Path $downloadsPath -Filter "$todayFilePattern*.xlsx" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
         Write-Host "Found today's raw report file: $($latestFile.FullName)" -ForegroundColor Green
-        
-        # # Proceed to sanitize the file
-        # Sanitize-NewHireReport -filePath $latestFile.FullName
+
+        # Proceed to sanitize the file
+        Sanitize-NewHireReport -FilePath $latestFile.FullName
     } else {
         Write-Host "No raw report file found for today ($todayDate). Please ensure the file is downloaded in the Downloads folder." -ForegroundColor Red
     }
