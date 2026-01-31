@@ -27,7 +27,7 @@
 
 # Sanitizes the raw Workday Excel file by:
 #   1. Removing the first 9 rows (Workday report metadata/filters)
-#   2. Using row 10 as headers
+#   2. Using row 10 as headers (handling duplicates)
 #   3. Filtering for El Salvador location ("SLV-San Salvador*")
 #   4. Filtering for future hire dates only (Latest Hire Date > today)
 #   5. Exporting to a clean, formatted Excel file
@@ -40,16 +40,47 @@ function Sanitize-NewHireReport {
     Write-Host "`nStarting sanitization of: $FilePath" -ForegroundColor Cyan
 
     # --------------------------------------------------------------------------
-    # STEP 1: Import the raw Excel data, skipping the first 9 metadata rows
+    # STEP 1: Read headers and make duplicates unique
     # --------------------------------------------------------------------------
-    # The -StartRow parameter tells ImportExcel which row contains the headers.
-    # In the raw Workday file:
-    #   - Rows 1-9: Report metadata (title, filters, parameters)
-    #   - Row 10: Actual column headers
-    #   - Row 11+: Data
-    # So we use StartRow = 10 to treat row 10 as headers.
+    # Workday exports often have duplicate or empty column headers.
+    # ImportExcel fails on duplicates, so we:
+    #   1. Read row 10 without headers to get raw header names
+    #   2. Make each header unique by appending _2, _3, etc. to duplicates
+    #   3. Re-import using our unique header names
 
-    $rawData = Import-Excel -Path $FilePath -StartRow 10
+    # First, read just the header row (row 10) as data
+    $headerRow = Import-Excel -Path $FilePath -StartRow 10 -EndRow 10 -NoHeader
+
+    # Extract header values from the first (and only) row
+    # NoHeader gives us properties like P1, P2, P3... so we get their values
+    $originalHeaders = $headerRow.PSObject.Properties | ForEach-Object { $_.Value }
+
+    # Make headers unique by tracking occurrences
+    $headerCounts = @{}
+    $uniqueHeaders = @()
+
+    foreach ($header in $originalHeaders) {
+        # Handle null/empty headers
+        $headerName = if ([string]::IsNullOrWhiteSpace($header)) { "EmptyColumn" } else { $header.ToString().Trim() }
+
+        if ($headerCounts.ContainsKey($headerName)) {
+            $headerCounts[$headerName]++
+            $uniqueHeaders += "$headerName`_$($headerCounts[$headerName])"
+        } else {
+            $headerCounts[$headerName] = 1
+            $uniqueHeaders += $headerName
+        }
+    }
+
+    Write-Host "  Found $($uniqueHeaders.Count) columns (duplicates made unique)" -ForegroundColor Gray
+
+    # --------------------------------------------------------------------------
+    # STEP 2: Import the data using our unique headers
+    # --------------------------------------------------------------------------
+    # -StartRow 11 skips the original header row (row 10) since we provide our own
+    # -HeaderName uses our de-duplicated headers
+
+    $rawData = Import-Excel -Path $FilePath -StartRow 11 -HeaderName $uniqueHeaders
 
     # Quick validation: ensure we got data
     if ($null -eq $rawData -or $rawData.Count -eq 0) {
@@ -57,10 +88,10 @@ function Sanitize-NewHireReport {
         return $null
     }
 
-    Write-Host "  Imported $($rawData.Count) rows (after skipping metadata)" -ForegroundColor Gray
+    Write-Host "  Imported $($rawData.Count) rows of data" -ForegroundColor Gray
 
     # --------------------------------------------------------------------------
-    # STEP 2: Filter by Location - keep only "SLV-San Salvador*"
+    # STEP 3: Filter by Location - keep only "SLV-San Salvador*"
     # --------------------------------------------------------------------------
     # The -like operator with wildcard (*) matches any string starting with
     # "SLV-San Salvador" regardless of what comes after.
@@ -72,7 +103,7 @@ function Sanitize-NewHireReport {
     Write-Host "  After location filter (SLV-San Salvador*): $($filteredByLocation.Count) rows" -ForegroundColor Gray
 
     # --------------------------------------------------------------------------
-    # STEP 3: Filter by Date - keep only future hire dates
+    # STEP 4: Filter by Date - keep only future hire dates
     # --------------------------------------------------------------------------
     # We compare "Latest Hire Date" against today's date.
     # The [datetime] cast converts the Excel date value to a comparable date.
@@ -98,7 +129,7 @@ function Sanitize-NewHireReport {
     Write-Host "  After date filter (future dates only): $($filteredData.Count) rows" -ForegroundColor Gray
 
     # --------------------------------------------------------------------------
-    # STEP 4: Validate we have results
+    # STEP 5: Validate we have results
     # --------------------------------------------------------------------------
     if ($filteredData.Count -eq 0) {
         Write-Host "WARNING: No records match the filters. No output file created." -ForegroundColor Yellow
@@ -106,7 +137,7 @@ function Sanitize-NewHireReport {
     }
 
     # --------------------------------------------------------------------------
-    # STEP 5: Export to new sanitized Excel file
+    # STEP 6: Export to new sanitized Excel file
     # --------------------------------------------------------------------------
     # Build the output filename with today's date for easy identification
     $outputFolder = "$env:USERPROFILE\Downloads\NewHires-Reports"
