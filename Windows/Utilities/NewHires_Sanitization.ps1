@@ -25,13 +25,18 @@
 #   - Will detect if another instance of this script is already running to avoid conflicts.
 #
 
+$Global:SanitizedReportsFolder = "$env:USERPROFILE\Downloads\NewHires-Reports"
+$Global:RawReportsFolder = "$env:USERPROFILE\Downloads"
+$Global:OneDriveLibraryShortcut = "$env:USERPROFILE\OneDrive - RSM\ElSalvador_Office_ITSupport - New Hires Reports"
+$Global:SharePointSiteUrl = "https://rsmnet.sharepoint.com/sites/ES_Office_ITSupport"
+
 # Sanitizes the raw Workday Excel file by:
 #   1. Removing the first 9 rows (Workday report metadata/filters)
 #   2. Using row 10 as headers (handling duplicates)
 #   3. Filtering for El Salvador location ("SLV-San Salvador*")
 #   4. Filtering for future hire dates only (Latest Hire Date > today)
 #   5. Exporting to a clean, formatted Excel file
-function Sanitize-NewHireReport {
+function New-NewHireReport {
     param(
         [Parameter(Mandatory = $true)]
         [string]$FilePath
@@ -93,8 +98,6 @@ function Sanitize-NewHireReport {
     # --------------------------------------------------------------------------
     # STEP 3: Filter by Location - keep only "SLV-San Salvador*"
     # --------------------------------------------------------------------------
-    # The -like operator with wildcard (*) matches any string starting with
-    # "SLV-San Salvador" regardless of what comes after.
 
     $filteredByLocation = $rawData | Where-Object {
         $_."Location Proposed" -like "SLV-San Salvador*"
@@ -140,9 +143,8 @@ function Sanitize-NewHireReport {
     # STEP 6: Export to new sanitized Excel file
     # --------------------------------------------------------------------------
     # Build the output filename with today's date for easy identification
-    $outputFolder = "$env:USERPROFILE\Downloads\NewHires-Reports"
     $todayFormatted = Get-Date -Format "yyyy-MM-dd"
-    $outputPath = "$outputFolder\NewHires_Sanitized_$todayFormatted.xlsx"
+    $outputPath = "$global:SanitizedReportsFolder\NewHires_Sanitized_$todayFormatted.xlsx"
 
     # Export with table formatting for a clean, professional look
     # -AutoSize: Adjusts column widths to fit content
@@ -151,53 +153,184 @@ function Sanitize-NewHireReport {
     $filteredData | Export-Excel -Path $outputPath `
         -AutoSize `
         -TableName "NewHires" `
-        -TableStyle Medium2 `
+        -TableStyle Medium3 `
         -FreezeTopRow
+        
+    # --------------------------------------------------------------------------
+    # STEP 7: Move the raw file to an "Archive" folder
+    # --------------------------------------------------------------------------
+    # This keeps the Downloads folder clean and prevents re-processing the same file.
+    $archiveFolder = "$global:SanitizedReportsFolder\Raws_Archive"
+    Move-Item -Path $FilePath -Destination $archiveFolder -Force
 
     Write-Host "`nSanitized file created: $outputPath" -ForegroundColor Green
     Write-Host "  Total records: $($filteredData.Count)" -ForegroundColor Green
+    write-Host "  Raw file moved to archive: $archiveFolder" -ForegroundColor Cyan
+    Write-Host "------------------------------------------" -ForegroundColor White
 
     return $outputPath
 }
 
+# Utility function to find the latest sanitized report in the "NewHires-Reports" folder
+function Find-LatestSanitizedReport {
+    
+    try {
+        
+        $latestFile = Get-ChildItem -Path $global:SanitizedReportsFolder -Filter "NewHires_Sanitized_*.xlsx" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        
+        return $latestFile
+    }
+    catch {
+        Write-Host "No files were found in the $($global:SanitizedReportsFolder) folder." -ForegroundColor Yellow
+        return $null
+    }
+    
+}
 
 # Checks if the "NewHires-Reports" folder exists in the user's Downloads directory.
 function Confirm-ReportsFolderExists {
     
-    $folderPath = "$env:USERPROFILE\Downloads\NewHires-Reports"
-    
-    if(Test-Path $folderPath) {
+    if(Test-Path $global:SanitizedReportsFolder) {
         return $true
     } else {
         Write-Host "The folder 'NewHires-Reports' does not exist in the Downloads directory. Creating..." -ForegroundColor Cyan
         
-        New-Item -ItemType Directory -Path $folderPath | Out-Null
-        Write-Host "Folder created at: $folderPath" -ForegroundColor Green
+        New-Item -ItemType Directory -Path $global:SanitizedReportsFolder | Out-Null
+        Write-Host "Folder created at: $global:SanitizedReportsFolder" -ForegroundColor Green
         return $true
     }
 }
 
-
-function Find-LatestRawReport {
-
-    $downloadsPath = "$env:USERPROFILE\Downloads"
-    $defaultFileName = "New Hire Onboarding - IT (Scheduled)"
-    $todayDate = Get-Date -Format "yyyy-MM-dd"
-    $todayFilePattern = "$defaultFileName $todayDate"
-    Write-Host "Looking for today's raw report file with pattern: $todayFilePattern" -ForegroundColor Cyan
+# Confirms that the OneDrive shortcut to the SharePoint document library exists
+function Confirm-OneDriveLibraryShortcutExists {
     
-    if(Test-Path "$downloadsPath\$todayFilePattern*.xlsx") {
-        $latestFile = Get-ChildItem -Path $downloadsPath -Filter "$todayFilePattern*.xlsx" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-        Write-Host "Found today's raw report file: $($latestFile.FullName)" -ForegroundColor Green
-
-        # Proceed to sanitize the file
-        Sanitize-NewHireReport -FilePath $latestFile.FullName
+    # Checks if the expected shortcut path exists in the user's OneDrive directory
+    if (Test-Path $global:OneDriveLibraryShortcut) {
+        Write-Host "OneDrive shortcut to SharePoint library found: $global:OneDriveLibraryShortcut" -ForegroundColor Green
+        
+        # Ensures that OneDrive is running to sync the shortcut properly
+        $oneDriveProcess = Get-Process -Name "OneDrive" -ErrorAction SilentlyContinue
+        if ($null -eq $oneDriveProcess) { 
+            Write-Host "Warning: OneDrive is not running. Please start OneDrive to ensure the shortcut is synced properly." -ForegroundColor Red
+            exit 1
+        }
+        
+        return $true
+        
     } else {
-        Write-Host "No raw report file found for today ($todayDate). Please ensure the file is downloaded in the Downloads folder." -ForegroundColor Red
+        # If the shortcut doesn't exist, provide clear instructions to the user on how to create it
+        Write-Host "OneDrive shortcut to SharePoint library not found at: $global:OneDriveLibraryShortcut" -ForegroundColor Red
+        Write-Host "Please create a shortcut to the 'New Hires Reports' library in your OneDrive and run the script again." -ForegroundColor Yellow
+        
+        Write-Host "`n1. Visit $($global:SharePointSiteUrl) in your web browser." -ForegroundColor Yellow
+        Write-Host "2. Navigate to the 'New Hires Reports' document library." -ForegroundColor Yellow
+        Write-Host "3. Click 'Add shortcut to OneDrive' to create a OneDrive shortcut to the library." -ForegroundColor Yellow
+        Write-Host "4. After the shortcut is created, run this script again." -ForegroundColor Yellow
+        
+        Write-Host "`nOpen the SharePoint site now? (Y/N)" -ForegroundColor Cyan
+        $response = Read-Host " "
+        if ($response -eq "y" -or $response -eq "Y") {
+            Start-Process $global:SharePointSiteUrl
+        }
+        exit 1
     }
 }
 
+# Once the sanitized file has been created, upload it to the "NewHires-Reports" library
+function Add-ReportToSharePoint {
+    
+    if (Find-LatestSanitizedReport) {
+                
+        # Confirm the folder shortcut to the SharePoint library exists before attempting to upload
+        if (Confirm-OneDriveLibraryShortcutExists) {
+            
+            # Confirm that the file we're going to copy doesn't already exist in the OneDrive shortcut folder to avoid duplicates. If it does, we can skip copying and just inform the user that the file should already be syncing to SharePoint.
+            
+            $fileToUpload = Find-LatestSanitizedReport
+            
+            if (Test-Path "$global:OneDriveLibraryShortcut\$(Split-Path $fileToUpload -Leaf)") {
+                Write-Host "Today's report is already in the OneDrive shortcut for the SharePoint library. Do you wish to overwrite it? (Y/N)" -ForegroundColor Green
+                $overwriteResponse = Read-Host " "
+                if ($overwriteResponse -ne "y" -and $overwriteResponse -ne "Y") {
+                    exit 0
+                }
+            }
+            
+            Write-Host "`n------------------------------------------" -ForegroundColor White
+            Write-Host "Preparing to upload the latest sanitized report: $fileToUpload" -ForegroundColor Cyan
+            Write-Host "`n------------------------------------------" -ForegroundColor White
+            
+            # Write-Host "File to upload: $fileToUpload" -ForegroundColor Green
+            # Write-Host "New copied file path: $global:OneDriveLibraryShortcut\$($fileToUpload | Split-Path -Leaf)" -ForegroundColor Green
+            
+            # Take the latest sanitized file and copy it to the OneDrive shortcut folder
+            Copy-Item -Path $fileToUpload -Destination $global:OneDriveLibraryShortcut
+            
+            Start-Sleep -Seconds 5 # Wait a moment to ensure the file is copied before checking for it in OneDrive
+            
+            if (Test-Path "$global:OneDriveLibraryShortcut\$(Split-Path $fileToUpload -Leaf)") {
+                Write-Host "File successfully uploaded to the OneDrive shortcut. It should sync to SharePoint shortly." -ForegroundColor Green
+                exit 0
+            } else {
+                Write-Host "Error: File was not found in the OneDrive shortcut after copying. Please check your OneDrive sync status." -ForegroundColor Red
+                exit 1
+            }
+            
+        }
+    }
+}
 
+# Find the latest raw report file in the Downloads folder based on the expected naming convention and process it. If no new raw file is found, check for existing sanitized reports to determine if the user needs to download today's raw file or if they just need to wait for it to be processed.
+function Find-LatestRawReport {
+    
+    # The name with which all raw reports come from Workday
+    $defaultFileName = "New Hire Onboarding - IT (Scheduled)"
+    # Get today's date in the same format as the raw file naming convention to find today's file
+    $todayDate = Get-Date -Format "yyyy-MM-dd"
+    # The expected name pattern for today's raw file
+    $todayFilePattern = "$defaultFileName $todayDate"
+    Write-Host "Looking for today's raw report file with pattern: $todayFilePattern" -ForegroundColor Cyan
+    
+    # Check if the expected file is in the Downloads folder
+    if(Test-Path "$global:RawReportsFolder\$todayFilePattern*.xlsx") {
+        
+        # If the file exists, get the latest one (in case there are multiple with similar names) and proceed to sanitize it
+        $latestFile = Get-ChildItem -Path $global:RawReportsFolder -Filter "$todayFilePattern*.xlsx" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        Write-Host "Found today's raw report file: $($latestFile.FullName)" -ForegroundColor Green
+
+        # Proceed to sanitize the file
+        New-NewHireReport -FilePath $latestFile.FullName
+        
+        Start-Sleep -Seconds 2 # Wait a moment to ensure the sanitized file is created before attempting to upload
+        Add-ReportToSharePoint
+    } else {
+        
+        # If no file with today's date is found, check if there's already a sanitized file with today's date. If not, warn the user to download the raw file and run the script again. This handles the case where the raw file hasn't been downloaded yet but we want to avoid confusion if a sanitized file from a previous day exists.
+        $latestSanitizedReport = Find-LatestSanitizedReport
+        
+        if ($latestSanitizedReport) {
+            
+            # Isolate the latest sanitized report's date from its filename to compare with today's date
+            
+            $sanitizedReportDate = Get-Date ($latestSanitizedReport.BaseName -split "_")[-1] -Format "yyyy-MM-dd"
+            
+            Write-Host "Sanitized report date found: $sanitizedReportDate" -ForegroundColor Gray
+            # Check if the latest sanitized report is from a previous date, which would indicate that today's raw file hasn't been processed yet. If so, prompt the user to download the raw file and run the script again. If the latest sanitized report is already from today, inform the user that no new raw file has been detected yet.
+            if ($sanitizedReportDate -lt $todayDate) {
+                Write-Host "No raw report file found for today ($todayDate). The latest sanitized report is from $sanitizedReportDate." -ForegroundColor Yellow
+                Write-Host "Please ensure the new raw file is downloaded in the Downloads folder and run the script again." -ForegroundColor Yellow
+                exit 1
+            } elseif ($sanitizedReportDate -eq $todayDate) {
+                
+                Write-Host "No new raw report file detected for today ($todayDate), but a sanitized report from today already exists." -ForegroundColor Yellow
+                Write-Host "Moving to confirm that the file has already been uploaded to SharePoint..." -ForegroundColor Yellow
+                Add-ReportToSharePoint
+            }
+        }
+        Write-Host "No raw report file found for today ($todayDate), and no existing sanitized reports exist. Please ensure today's raw report from Workday is downloaded in the Downloads folder." -ForegroundColor Red -BackgroundColor White
+        Write-Host "`n"
+    }
+}
 
 # -------------------------------------------------
 # |          SCRIPT EXECUTION STARTS HERE         |
