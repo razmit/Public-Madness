@@ -71,7 +71,8 @@ function New-NewHireReport {
         if ($headerCounts.ContainsKey($headerName)) {
             $headerCounts[$headerName]++
             $uniqueHeaders += "$headerName`_$($headerCounts[$headerName])"
-        } else {
+        }
+        else {
             $headerCounts[$headerName] = 1
             $uniqueHeaders += $headerName
         }
@@ -171,18 +172,54 @@ function New-NewHireReport {
     return $outputPath
 }
 
+# Function to verify what sanitized files have been alreayd transferred to the OneDrive shortcut folder for SharePoint upload to avoid duplicates.
+function Get-AllOneDriveSanitizedFiles {
+
+    try {
+        # Make sure the shortcut exists
+        if (Confirm-OneDriveLibraryShortcutExists) {
+            
+            $allUploadedReports = Get-ChildItem -Path $Global:OneDriveLibraryShortcut -Filter "*.xlsx" | Select-Object -ExpandProperty Name
+            
+            return $allUploadedReports
+        }
+        else {
+            Write-Host "OneDrive shortcut to SharePoint library not found. Cannot confirm sanitized files in OneDrive." -ForegroundColor Red
+            return $false
+        }
+    }
+    catch {
+        Write-Host "An error occurred while trying to retrieve sanitized files from OneDrive: $_" -ForegroundColor Red
+    }
+}
+
 # Utility function to find the latest sanitized report in the "NewHires-Reports" folder
 function Find-LatestSanitizedReport {
     
     try {
         
-        $latestFile = Get-ChildItem -Path $global:SanitizedReportsFolder -Filter "NewHires_Sanitized_*.xlsx" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        $latestFile = Get-ChildItem -Path $Global:SanitizedReportsFolder -Filter "NewHires_Sanitized_*.xlsx" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
         
         return $latestFile
     }
     catch {
-        Write-Host "No files were found in the $($global:SanitizedReportsFolder) folder." -ForegroundColor Yellow
+        Write-Host "No files were found in the $($Global:SanitizedReportsFolder) folder." -ForegroundColor Yellow
         return $null
+    }
+    
+}
+
+# Utility function to find all sanitized reports in the "NewHires-Reports" folder to confirm that all the expected files are present and to get their dates for comparison with the raw files in the Downloads folder. 
+function Find-AllLocalSanitizedReports { 
+    
+    try {
+        $sanitizedLocal = Get-ChildItem -Path $Global:SanitizedReportsFolder -File -Filter "*.xlsx" | Select-Object -ExpandProperty Name
+        
+        return $sanitizedLocal
+    }
+    catch {
+        Write-Host "An error occurred while trying to retrieve sanitized reports: $_" -ForegroundColor Red
+        exit 1
     }
     
 }
@@ -190,9 +227,10 @@ function Find-LatestSanitizedReport {
 # Checks if the "NewHires-Reports" folder exists in the user's Downloads directory.
 function Confirm-ReportsFolderExists {
     
-    if(Test-Path $global:SanitizedReportsFolder) {
+    if (Test-Path $global:SanitizedReportsFolder) {
         return $true
-    } else {
+    }
+    else {
         Write-Host "The folder 'NewHires-Reports' does not exist in the Downloads directory. Creating..." -ForegroundColor Cyan
         
         New-Item -ItemType Directory -Path $global:SanitizedReportsFolder | Out-Null
@@ -217,7 +255,8 @@ function Confirm-OneDriveLibraryShortcutExists {
         
         return $true
         
-    } else {
+    }
+    else {
         # If the shortcut doesn't exist, provide clear instructions to the user on how to create it
         Write-Host "OneDrive shortcut to SharePoint library not found at: $global:OneDriveLibraryShortcut" -ForegroundColor Red
         Write-Host "Please create a shortcut to the 'New Hires Reports' library in your OneDrive and run the script again." -ForegroundColor Yellow
@@ -271,7 +310,8 @@ function Add-ReportToSharePoint {
             if (Test-Path "$global:OneDriveLibraryShortcut\$(Split-Path $fileToUpload -Leaf)") {
                 Write-Host "File successfully uploaded to the OneDrive shortcut. It should sync to SharePoint shortly." -ForegroundColor Green
                 exit 0
-            } else {
+            }
+            else {
                 Write-Host "Error: File was not found in the OneDrive shortcut after copying. Please check your OneDrive sync status." -ForegroundColor Red
                 exit 1
             }
@@ -292,7 +332,7 @@ function Find-LatestRawReport {
     Write-Host "Looking for today's raw report file with pattern: $todayFilePattern" -ForegroundColor Cyan
     
     # Check if the expected file is in the Downloads folder
-    if(Test-Path "$global:RawReportsFolder\$todayFilePattern*.xlsx") {
+    if (Test-Path "$global:RawReportsFolder\$todayFilePattern*.xlsx") {
         
         # If the file exists, get the latest one (in case there are multiple with similar names) and proceed to sanitize it
         $latestFile = Get-ChildItem -Path $global:RawReportsFolder -Filter "$todayFilePattern*.xlsx" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
@@ -303,7 +343,8 @@ function Find-LatestRawReport {
         
         Start-Sleep -Seconds 2 # Wait a moment to ensure the sanitized file is created before attempting to upload
         Add-ReportToSharePoint
-    } else {
+    }
+    else {
         
         # If no file with today's date is found, check if there's already a sanitized file with today's date. If not, warn the user to download the raw file and run the script again. This handles the case where the raw file hasn't been downloaded yet but we want to avoid confusion if a sanitized file from a previous day exists.
         $latestSanitizedReport = Find-LatestSanitizedReport
@@ -318,11 +359,78 @@ function Find-LatestRawReport {
             # Check if the latest sanitized report is from a previous date, which would indicate that today's raw file hasn't been processed yet. If so, prompt the user to download the raw file and run the script again. If the latest sanitized report is already from today, inform the user that no new raw file has been detected yet.
             if ($sanitizedReportDate -lt $todayDate) {
                 Write-Host "No raw report file found for today ($todayDate). The latest sanitized report is from $sanitizedReportDate." -ForegroundColor Yellow
+                
+                # In case there's no raw report for today, get ALL of the raw reports currently present in the Downloads folder
+                $allMatchingFiles = Get-ChildItem -Path $global:RawReportsFolder -Filter "$defaultFileName*.xlsx" | Sort-Object LastWriteTime -Descending | Select-Object -ExpandProperty Name
+                
+                $allMatchingFilesDates = $allMatchingFiles | ForEach-Object { ($_ -split " ")[6] }
+                
+                # Get ALL of the already sanitized reports in the "NewHires-Reports" folder 
+                $allLocalSanitizedReports = Find-AllLocalSanitizedReports
+                
+                # Get the dates to compare with the raw files in the Downloads folder
+                $localSanitizedDates = $allLocalSanitizedReports | ForEach-Object { ($_ -split "_")[-1] -replace ".xlsx", ""
+                }
+                
+                # Get the dates that are missing from NewHires-Reports compared to the raw files in the Downloads folder to confirm which raw files have not been sanitized yet
+                $missingDatesLocal = $allMatchingFilesDates | Where-Object { $localSanitizedDates -notcontains $_ }
+                
+                # If the count is greater than 0, it means there are raw files in the Downloads folder that have not been sanitized and moved to the "NewHires-Reports" folder yet. If the count is 0, it means all raw files in the Downloads folder have corresponding sanitized reports in the "NewHires-Reports" folder
+                # TODO: Uncomment the chunk below once we're ready to test after modifying the Add-ReportToSharePoint function
+                # if ($missingDatesLocal.Count -gt 0) {
+                    
+                #     foreach ($missingDate in $missingDatesLocal) {
+                #         # Get the actual file name for the missing date to sanitize it
+                #         $fileToSanitize = Get-ChildItem -Path $global:RawReportsFolder -Filter "$defaultFileName $missingDate*.xlsx" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+
+                #         # Sanitize the missing file
+                #         New-NewHireReport -FilePath $fileToSanitize.FullName
+                #     }
+                # }
+
+                # Get ALL of the already sanitized reports in the OneDrive shortcut folder for SharePoint upload to confirm which files have already been uploaded to SharePoint
+                $allOneDriveSanitizedReports = Get-AllOneDriveSanitizedFiles
+                
+                # Get the dates to compare with the local sanitized files 
+                $oneDriveDates = $allOneDriveSanitizedReports | ForEach-Object { ($_ -split "_")[-1] -replace ".xlsx", ""
+                }
+
+                Write-Host "All OneDrive sanitized dates: $($oneDriveDates -join ", ")" -ForegroundColor Magenta
+                
+                # Get all the sanitized report dates that are missing from the OneDrive shortcut for SharePoint upload to confirm which sanitized reports have not been uploaded to SharePoint yet
+                $missingFilesOneDrive = $localSanitizedDates | Where-Object { $oneDriveDates -notcontains $_ }
+                
+                # If the count is greater than 0, it means there are sanitized reports in the "NewHires-Reports" folder that have not been uploaded to SharePoint yet. If the count is 0, it means all local sanitized report dates have corresponding files in the OneDrive shortcut for SharePoint upload.
+                if ($missingFilesOneDrive.Count -gt 0) { 
+                    
+                    foreach ($missingFile in $missingFilesOneDrive) {
+                        $fileToUpload = Get-ChildItem -Path $Global:SanitizedReportsFolder -Filter "*_$missingFile.xlsx" 
+                        
+                        # TODO: Modify the Add-ReportToSharePoint function to accept a file path parameter so that we can specify which sanitized file to upload to the OneDrive shortcut for SharePoint upload instead of just uploading the latest one. This way, we can ensure that all sanitized files get uploaded to SharePoint even if they were not uploaded on the same day they were sanitized.
+                    }
+                }
+                else {
+                    Write-Host "All local sanitized report dates have corresponding files in the OneDrive shortcut for SharePoint upload." -ForegroundColor Green
+                }
+                
+                $missingFilesLocal = Compare-Object -ReferenceObject $allMatchingFiles -DifferenceObject $allLocalSanitizedReports | Where-Object { $_.SideIndicator -eq "<=" } | Select-Object -ExpandProperty InputObject
+
+                
+                # foreach ($report in $allMatchingFiles) {
+                    
+                #     # Get the dates of the existing folders to compare if there already are sanitized reports for these days
+                #     $reportDate = Get-Date ($report -split " ")[6] -Format "yyyy-MM-dd"
+                #     Write-Host "Report: $($reportDate)"
+                    
+                    
+                # }
+                
                 Write-Host "Please ensure the new raw file is downloaded in the Downloads folder and run the script again." -ForegroundColor Yellow
                 exit 1
-            } elseif ($sanitizedReportDate -eq $todayDate) {
-                
+            }
+            elseif ($sanitizedReportDate -eq $todayDate) {
                 Write-Host "No new raw report file detected for today ($todayDate), but a sanitized report from today already exists." -ForegroundColor Yellow
+                
                 Write-Host "Moving to confirm that the file has already been uploaded to SharePoint..." -ForegroundColor Yellow
                 Add-ReportToSharePoint
             }
@@ -341,7 +449,8 @@ if ($folderExists) {
     Write-Host "Ready to process new hire files..." -ForegroundColor Green
     
     Find-LatestRawReport
-} else {
+}
+else {
     Write-Host "Failed to confirm or create the 'NewHires-Reports' folder. Exiting script." -ForegroundColor Red
     exit 1
 }
