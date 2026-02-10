@@ -1,7 +1,7 @@
-connect-pnpOnline -Url https://rsmnet.sharepoint.com/sites/in_ORM -clientId f6666fe0-04e6-419a-b4bb-4025060af8f5 -interactive
+connect-pnpOnline -Url https://rsmnet.sharepoint.com/sites/Teams/Leadership/PartnerPrincipal -clientId f6666fe0-04e6-419a-b4bb-4025060af8f5 -interactive
 
 # The file's name
-$fileName = "Business Continuity"
+$fileName = "Canada"
 
 # Get all document libraries in the site
 $lists = Get-PnPList | Where-Object { $_.BaseTemplate -eq 101 } # 101 is the template ID for document libraries
