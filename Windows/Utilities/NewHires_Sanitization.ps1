@@ -244,8 +244,6 @@ function Confirm-OneDriveLibraryShortcutExists {
     
     # Checks if the expected shortcut path exists in the user's OneDrive directory
     if (Test-Path $global:OneDriveLibraryShortcut) {
-        Write-Host "OneDrive shortcut to SharePoint library found: $global:OneDriveLibraryShortcut" -ForegroundColor Green
-        
         # Ensures that OneDrive is running to sync the shortcut properly
         $oneDriveProcess = Get-Process -Name "OneDrive" -ErrorAction SilentlyContinue
         if ($null -eq $oneDriveProcess) { 
@@ -278,42 +276,80 @@ function Confirm-OneDriveLibraryShortcutExists {
 # Once the sanitized file has been created, upload it to the "NewHires-Reports" library
 function Add-ReportToSharePoint {
     
+    param (
+        [Parameter(Mandatory = $false)]
+        [string]
+        $ReportsToUpload
+    )
+    
+    
+    # Confirm that there's at least one sanitized report available to upload
     if (Find-LatestSanitizedReport) {
                 
         # Confirm the folder shortcut to the SharePoint library exists before attempting to upload
         if (Confirm-OneDriveLibraryShortcutExists) {
             
-            # Confirm that the file we're going to copy doesn't already exist in the OneDrive shortcut folder to avoid duplicates. If it does, we can skip copying and just inform the user that the file should already be syncing to SharePoint.
+            if ($ReportsToUpload) {
+                
+                # Make sure the file doesn't already exist in the OneDrive shortcut
+                if (Test-Path "$global:OneDriveLibraryShortcut\$(Split-Path $ReportsToUpload -Leaf)") {
+                    Write-Host "Today's report is already in the OneDrive shortcut for the SharePoint library. Do you wish to overwrite it? (Y/N)" -ForegroundColor Green
+                    $overwriteResponse = Read-Host " "
+                    if ($overwriteResponse -ne "y" -and $overwriteResponse -ne "Y") {
+                        exit 0
+                    }
+                }
             
-            $fileToUpload = Find-LatestSanitizedReport
+                Write-Host "`n------------------------------------------" -ForegroundColor White
+                Write-Host "Preparing to upload the specified report to the OneDrive shortcut for SharePoint upload... $(Split-Path $ReportsToUpload -Leaf)" -ForegroundColor Cyan
+                Write-Host "`n------------------------------------------" -ForegroundColor White
+                
+                Copy-Item -Path $ReportsToUpload -Destination $global:OneDriveLibraryShortcut
             
-            if (Test-Path "$global:OneDriveLibraryShortcut\$(Split-Path $fileToUpload -Leaf)") {
-                Write-Host "Today's report is already in the OneDrive shortcut for the SharePoint library. Do you wish to overwrite it? (Y/N)" -ForegroundColor Green
-                $overwriteResponse = Read-Host " "
-                if ($overwriteResponse -ne "y" -and $overwriteResponse -ne "Y") {
-                    exit 0
+                Start-Sleep -Seconds 3 # Wait a moment to ensure the file is copied before checking for it in OneDrive
+            
+                if (Test-Path "$global:OneDriveLibraryShortcut\$(Split-Path $ReportsToUpload -Leaf)") {
+                    Write-Host "File successfully uploaded to the OneDrive shortcut. It should sync to SharePoint shortly." -ForegroundColor Green
+                }
+                else {
+                    Write-Host "Error: File was not found in the OneDrive shortcut after copying. Please check your OneDrive sync status." -ForegroundColor Red
+                    exit 1
                 }
             }
-            
-            Write-Host "`n------------------------------------------" -ForegroundColor White
-            Write-Host "Preparing to upload the latest sanitized report: $fileToUpload" -ForegroundColor Cyan
-            Write-Host "`n------------------------------------------" -ForegroundColor White
-            
-            # Write-Host "File to upload: $fileToUpload" -ForegroundColor Green
-            # Write-Host "New copied file path: $global:OneDriveLibraryShortcut\$($fileToUpload | Split-Path -Leaf)" -ForegroundColor Green
-            
-            # Take the latest sanitized file and copy it to the OneDrive shortcut folder
-            Copy-Item -Path $fileToUpload -Destination $global:OneDriveLibraryShortcut
-            
-            Start-Sleep -Seconds 5 # Wait a moment to ensure the file is copied before checking for it in OneDrive
-            
-            if (Test-Path "$global:OneDriveLibraryShortcut\$(Split-Path $fileToUpload -Leaf)") {
-                Write-Host "File successfully uploaded to the OneDrive shortcut. It should sync to SharePoint shortly." -ForegroundColor Green
-                exit 0
-            }
             else {
-                Write-Host "Error: File was not found in the OneDrive shortcut after copying. Please check your OneDrive sync status." -ForegroundColor Red
-                exit 1
+                
+                # No specific reports to upload were provided, so we will proceed to upload the latest sanitized report by default
+                
+                # Confirm that the file we're going to copy doesn't already exist in the OneDrive shortcut folder to avoid duplicates. If it does, we can skip copying and just inform the user that the file should already be syncing to SharePoint.
+            
+                $fileToUpload = Find-LatestSanitizedReport
+                Write-Host "Latest sanitized report to upload: $($fileToUpload.FullName)" -ForegroundColor Cyan
+            
+                if (Test-Path "$global:OneDriveLibraryShortcut\$(Split-Path $fileToUpload -Leaf)") {
+                    Write-Host "Today's report is already in the OneDrive shortcut for the SharePoint library. Do you wish to overwrite it? (Y/N)" -ForegroundColor Green
+                    $overwriteResponse = Read-Host " "
+                    if ($overwriteResponse -ne "y" -and $overwriteResponse -ne "Y") {
+                        exit 0
+                    }
+                }
+            
+                Write-Host "`n------------------------------------------" -ForegroundColor White
+                Write-Host "Preparing to upload the latest sanitized report: $fileToUpload" -ForegroundColor Cyan
+                Write-Host "`n------------------------------------------" -ForegroundColor White
+
+                # Take the latest sanitized file and copy it to the OneDrive shortcut folder
+                Copy-Item -Path $fileToUpload -Destination $global:OneDriveLibraryShortcut
+            
+                Start-Sleep -Seconds 5 # Wait a moment to ensure the file is copied before checking for it in OneDrive
+            
+                if (Test-Path "$global:OneDriveLibraryShortcut\$(Split-Path $fileToUpload -Leaf)") {
+                    Write-Host "File successfully uploaded to the OneDrive shortcut. It should sync to SharePoint shortly." -ForegroundColor Green
+                    exit 0
+                }
+                else {
+                    Write-Host "Error: File was not found in the OneDrive shortcut after copying. Please check your OneDrive sync status." -ForegroundColor Red
+                    exit 1
+                }
             }
             
         }
@@ -363,6 +399,7 @@ function Find-LatestRawReport {
                 # In case there's no raw report for today, get ALL of the raw reports currently present in the Downloads folder
                 $allMatchingFiles = Get-ChildItem -Path $global:RawReportsFolder -Filter "$defaultFileName*.xlsx" | Sort-Object LastWriteTime -Descending | Select-Object -ExpandProperty Name
                 
+                # Get the dates of the raw files present in the Downloads folder
                 $allMatchingFilesDates = $allMatchingFiles | ForEach-Object { ($_ -split " ")[6] }
                 
                 # Get ALL of the already sanitized reports in the "NewHires-Reports" folder 
@@ -376,17 +413,16 @@ function Find-LatestRawReport {
                 $missingDatesLocal = $allMatchingFilesDates | Where-Object { $localSanitizedDates -notcontains $_ }
                 
                 # If the count is greater than 0, it means there are raw files in the Downloads folder that have not been sanitized and moved to the "NewHires-Reports" folder yet. If the count is 0, it means all raw files in the Downloads folder have corresponding sanitized reports in the "NewHires-Reports" folder
-                # TODO: Uncomment the chunk below once we're ready to test after modifying the Add-ReportToSharePoint function
-                # if ($missingDatesLocal.Count -gt 0) {
+                if ($missingDatesLocal.Count -gt 0) {
                     
-                #     foreach ($missingDate in $missingDatesLocal) {
-                #         # Get the actual file name for the missing date to sanitize it
-                #         $fileToSanitize = Get-ChildItem -Path $global:RawReportsFolder -Filter "$defaultFileName $missingDate*.xlsx" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+                    foreach ($missingDate in $missingDatesLocal) {
+                        # Get the actual file name for the missing date to sanitize it
+                        $fileToSanitize = Get-ChildItem -Path $global:RawReportsFolder -Filter "$defaultFileName $missingDate*.xlsx" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 
-                #         # Sanitize the missing file
-                #         New-NewHireReport -FilePath $fileToSanitize.FullName
-                #     }
-                # }
+                        # Sanitize the missing file
+                        New-NewHireReport -FilePath $fileToSanitize.FullName
+                    }
+                }
 
                 # Get ALL of the already sanitized reports in the OneDrive shortcut folder for SharePoint upload to confirm which files have already been uploaded to SharePoint
                 $allOneDriveSanitizedReports = Get-AllOneDriveSanitizedFiles
@@ -394,8 +430,6 @@ function Find-LatestRawReport {
                 # Get the dates to compare with the local sanitized files 
                 $oneDriveDates = $allOneDriveSanitizedReports | ForEach-Object { ($_ -split "_")[-1] -replace ".xlsx", ""
                 }
-
-                Write-Host "All OneDrive sanitized dates: $($oneDriveDates -join ", ")" -ForegroundColor Magenta
                 
                 # Get all the sanitized report dates that are missing from the OneDrive shortcut for SharePoint upload to confirm which sanitized reports have not been uploaded to SharePoint yet
                 $missingFilesOneDrive = $localSanitizedDates | Where-Object { $oneDriveDates -notcontains $_ }
@@ -406,24 +440,12 @@ function Find-LatestRawReport {
                     foreach ($missingFile in $missingFilesOneDrive) {
                         $fileToUpload = Get-ChildItem -Path $Global:SanitizedReportsFolder -Filter "*_$missingFile.xlsx" 
                         
-                        # TODO: Modify the Add-ReportToSharePoint function to accept a file path parameter so that we can specify which sanitized file to upload to the OneDrive shortcut for SharePoint upload instead of just uploading the latest one. This way, we can ensure that all sanitized files get uploaded to SharePoint even if they were not uploaded on the same day they were sanitized.
+                        Add-ReportToSharePoint -ReportsToUpload $fileToUpload.FullName
                     }
                 }
                 else {
                     Write-Host "All local sanitized report dates have corresponding files in the OneDrive shortcut for SharePoint upload." -ForegroundColor Green
                 }
-                
-                $missingFilesLocal = Compare-Object -ReferenceObject $allMatchingFiles -DifferenceObject $allLocalSanitizedReports | Where-Object { $_.SideIndicator -eq "<=" } | Select-Object -ExpandProperty InputObject
-
-                
-                # foreach ($report in $allMatchingFiles) {
-                    
-                #     # Get the dates of the existing folders to compare if there already are sanitized reports for these days
-                #     $reportDate = Get-Date ($report -split " ")[6] -Format "yyyy-MM-dd"
-                #     Write-Host "Report: $($reportDate)"
-                    
-                    
-                # }
                 
                 Write-Host "Please ensure the new raw file is downloaded in the Downloads folder and run the script again." -ForegroundColor Yellow
                 exit 1
