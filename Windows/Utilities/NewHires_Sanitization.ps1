@@ -151,18 +151,39 @@ function New-NewHireReport {
     # -AutoSize: Adjusts column widths to fit content
     # -TableName: Creates a formatted Excel table (enables sorting/filtering in Excel)
     # -TableStyle: Applies a predefined table style
-    $filteredData | Export-Excel -Path $outputPath `
+    # -PassThru: Returns the Excel package object so we can apply additional formatting
+    $excelPackage = $filteredData | Export-Excel -Path $outputPath `
         -AutoSize `
         -TableName "NewHires" `
-        -TableStyle Medium3 `
-        -FreezeTopRow
-        
+        -TableStyle Medium2 `
+        -FreezeTopRow `
+        -PassThru
+
     # --------------------------------------------------------------------------
-    # STEP 7: Move the raw file to an "Archive" folder
+    # STEP 7: Format date columns to show date only (no time)
     # --------------------------------------------------------------------------
-    # This keeps the Downloads folder clean and prevents re-processing the same file.
-    $archiveFolder = "$global:SanitizedReportsFolder\Raws_Archive"
-    Move-Item -Path $FilePath -Destination $archiveFolder -Force
+    # When ImportExcel reads dates, they become DateTime objects with a time
+    # component (midnight). We need to apply a date-only format to these columns
+    # so Excel displays them correctly without the "0:00" time suffix.
+
+    $worksheet = $excelPackage.Workbook.Worksheets["NewHires"]
+
+    # Find the column positions for date fields by checking the header row
+    # (Row 1 contains headers after export)
+    $dateColumns = @("Original Hire Date", "Latest Hire Date", "Hire Completed Date")
+
+    for ($col = 1; $col -le $worksheet.Dimension.Columns; $col++) {
+        $headerValue = $worksheet.Cells[1, $col].Value
+        if ($dateColumns -contains $headerValue) {
+            # Apply date format to entire column (from row 2 to last row)
+            # "M/d/yyyy" matches the original Workday format without time
+            $lastRow = $worksheet.Dimension.Rows
+            $worksheet.Cells[2, $col, $lastRow, $col].Style.Numberformat.Format = "M/d/yyyy"
+        }
+    }
+
+    # Save and close the Excel package
+    Close-ExcelPackage $excelPackage
 
     Write-Host "`nSanitized file created: $outputPath" -ForegroundColor Green
     Write-Host "  Total records: $($filteredData.Count)" -ForegroundColor Green
