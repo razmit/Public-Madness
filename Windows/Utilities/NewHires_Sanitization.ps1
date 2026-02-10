@@ -165,8 +165,11 @@ function New-NewHireReport {
     # When ImportExcel reads dates, they become DateTime objects with a time
     # component (midnight). We need to apply a date-only format to these columns
     # so Excel displays them correctly without the "0:00" time suffix.
+    #
+    # Note: We access the first worksheet (index 1 in EPPlus), not by table name.
+    # The -TableName parameter names the table, not the worksheet/sheet tab.
 
-    $worksheet = $excelPackage.Workbook.Worksheets["NewHires"]
+    $worksheet = $excelPackage.Workbook.Worksheets[1]
 
     # Find the column positions for date fields by checking the header row
     # (Row 1 contains headers after export)
@@ -179,6 +182,7 @@ function New-NewHireReport {
             # "M/d/yyyy" matches the original Workday format without time
             $lastRow = $worksheet.Dimension.Rows
             $worksheet.Cells[2, $col, $lastRow, $col].Style.Numberformat.Format = "M/d/yyyy"
+            Write-Host "  Applied date format to column: $headerValue" -ForegroundColor Gray
         }
     }
 
