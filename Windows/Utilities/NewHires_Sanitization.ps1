@@ -141,7 +141,29 @@ function New-NewHireReport {
     }
 
     # --------------------------------------------------------------------------
-    # STEP 6: Export to new sanitized Excel file
+    # STEP 6: Strip time component from date columns
+    # --------------------------------------------------------------------------
+    # Excel/ImportExcel stores dates as DateTime objects which include midnight.
+    # We convert them to date-only strings to prevent "0:00" from appearing.
+    # Using .ToString("M/d/yyyy") ensures consistent formatting.
+
+    $dateColumnsToFormat = @("Original Hire Date", "Latest Hire Date", "Hire Completed Date")
+
+    foreach ($row in $filteredData) {
+        foreach ($dateCol in $dateColumnsToFormat) {
+            if ($row.PSObject.Properties.Name -contains $dateCol -and $row.$dateCol) {
+                try {
+                    $row.$dateCol = ([datetime]$row.$dateCol).ToString("M/d/yyyy")
+                }
+                catch {
+                    # If conversion fails, leave the value as-is
+                }
+            }
+        }
+    }
+
+    # --------------------------------------------------------------------------
+    # STEP 7: Export to new sanitized Excel file
     # --------------------------------------------------------------------------
     # Build the output filename with today's date for easy identification
     $todayFormatted = Get-Date -Format "yyyy-MM-dd"
@@ -151,43 +173,13 @@ function New-NewHireReport {
     # -AutoSize: Adjusts column widths to fit content
     # -TableName: Creates a formatted Excel table (enables sorting/filtering in Excel)
     # -TableStyle: Applies a predefined table style
-    # -PassThru: Returns the Excel package object so we can apply additional formatting
-    $excelPackage = $filteredData | Export-Excel -Path $outputPath `
+    # Note: Date columns were already converted to strings in Step 6, so no
+    #       post-export formatting is needed.
+    $filteredData | Export-Excel -Path $outputPath `
         -AutoSize `
         -TableName "NewHires" `
         -TableStyle Medium2 `
-        -FreezeTopRow `
-        -PassThru
-
-    # --------------------------------------------------------------------------
-    # STEP 7: Format date columns to show date only (no time)
-    # --------------------------------------------------------------------------
-    # When ImportExcel reads dates, they become DateTime objects with a time
-    # component (midnight). We need to apply a date-only format to these columns
-    # so Excel displays them correctly without the "0:00" time suffix.
-    #
-    # Note: We access the first worksheet (index 1 in EPPlus), not by table name.
-    # The -TableName parameter names the table, not the worksheet/sheet tab.
-
-    $worksheet = $excelPackage.Workbook.Worksheets[1]
-
-    # Find the column positions for date fields by checking the header row
-    # (Row 1 contains headers after export)
-    $dateColumns = @("Original Hire Date", "Latest Hire Date", "Hire Completed Date")
-
-    for ($col = 1; $col -le $worksheet.Dimension.Columns; $col++) {
-        $headerValue = $worksheet.Cells[1, $col].Value
-        if ($dateColumns -contains $headerValue) {
-            # Apply date format to entire column (from row 2 to last row)
-            # "M/d/yyyy" matches the original Workday format without time
-            $lastRow = $worksheet.Dimension.Rows
-            $worksheet.Cells[2, $col, $lastRow, $col].Style.Numberformat.Format = "M/d/yyyy"
-            Write-Host "  Applied date format to column: $headerValue" -ForegroundColor Gray
-        }
-    }
-
-    # Save and close the Excel package
-    Close-ExcelPackage $excelPackage
+        -FreezeTopRow
 
     Write-Host "`nSanitized file created: $outputPath" -ForegroundColor Green
     Write-Host "  Total records: $($filteredData.Count)" -ForegroundColor Green
