@@ -168,47 +168,50 @@ function Get-AllSubsites {
 }
 
 # Function to get storage usage for a web
+# Uses REST API to sum file sizes across all document libraries (BaseTemplate 101).
+# Note: this counts current file versions only, not version history - good enough for
+# ranking purposes but will be lower than the Admin Center figure.
 function Get-WebStorageUsage {
     param(
         [string]$WebUrl
     )
 
     try {
-        # Method 1: Try to get storage from web properties
-        $web = Get-PnPWeb -Includes "WebTemplate,Created,LastItemModifiedDate,AssociatedOwnerGroup" -ErrorAction Stop
+        $totalBytes = [long]0
 
-        # Get all lists and calculate total storage
-        $lists = Get-PnPList -Includes "ItemCount,RootFolder" -ErrorAction Stop
+        # Get all document libraries in this web (non-hidden, BaseTemplate 101)
+        $listsResponse = Invoke-PnPSPRestMethod -Url "/_api/web/lists?`$filter=Hidden eq false and BaseTemplate eq 101&`$select=Id,Title,ItemCount" -Method Get -ErrorAction Stop
 
-        $totalBytes = 0
-        foreach ($list in $lists) {
-            # Skip system lists
-            if ($list.Hidden -or $list.BaseTemplate -eq 109) { # Skip system lists and catalogs
-                continue
-            }
+        foreach ($list in $listsResponse.value) {
+            if ($list.ItemCount -eq 0) { continue }
 
-            try {
-                # Get list items storage (approximate)
-                $listUrl = $list.RootFolder.ServerRelativeUrl
-                $storage = Get-PnPProperty -ClientObject $list -Property "DiskUsage" -ErrorAction SilentlyContinue
+            # Paginate through items, summing File_x0020_Size
+            $nextLink = "/_api/web/lists(guid'$($list.Id)')/items?`$select=File_x0020_Size&`$top=5000"
 
-                if ($storage) {
-                    $totalBytes += $storage
+            while ($nextLink) {
+                $itemsResponse = Invoke-PnPSPRestMethod -Url $nextLink -Method Get -ErrorAction Stop
+
+                foreach ($item in $itemsResponse.value) {
+                    if ($null -ne $item.File_x0020_Size -and $item.File_x0020_Size -gt 0) {
+                        $totalBytes += [long]$item.File_x0020_Size
+                    }
                 }
-            }
-            catch {
-                # If we can't get individual list storage, skip it
+
+                # Follow OData next page link if present
+                if ($itemsResponse.'odata.nextLink') {
+                    $nextLink = "/_api" + ($itemsResponse.'odata.nextLink' -split '/_api',2)[1]
+                }
+                else {
+                    $nextLink = $null
+                }
             }
         }
 
-        # Convert bytes to GB
-        $storageGB = [math]::Round($totalBytes / 1GB, 2)
-
-        return $storageGB
+        return [math]::Round($totalBytes / 1GB, 4)
     }
     catch {
         Write-Warning "Could not calculate storage for $WebUrl : $($_.Exception.Message)"
-        return 0
+        return $null
     }
 }
 
@@ -219,12 +222,14 @@ function Get-SiteOwners {
     )
 
     try {
-        $web = Get-PnPWeb -Includes "AssociatedOwnerGroup" -ErrorAction Stop
+        # Get the associated owner group directly - no -Includes needed
+        $ownerGroup = Get-PnPGroup -AssociatedOwnerGroup -ErrorAction Stop
 
-        if ($web.AssociatedOwnerGroup) {
-            $owners = Get-PnPGroupMember -Identity $web.AssociatedOwnerGroup.Id -ErrorAction Stop
-            $ownerNames = ($owners | Select-Object -ExpandProperty Title) -join "; "
-            return $ownerNames
+        if ($ownerGroup) {
+            $members = Get-PnPGroupMember -Group $ownerGroup -ErrorAction Stop
+            # Return display names, filtering out system/AD group entries if desired
+            $ownerNames = ($members | Where-Object { $_.PrincipalType -eq "User" } | Select-Object -ExpandProperty Title) -join "; "
+            return $(if ($ownerNames) { $ownerNames } else { "No individual owners (group-only)" })
         }
         else {
             return "No owner group"
@@ -242,8 +247,9 @@ function Get-SiteLastActivity {
     )
 
     try {
-        $web = Get-PnPWeb -Includes "LastItemModifiedDate" -ErrorAction Stop
-        return $web.LastItemModifiedDate
+        # Use REST API - avoids -Includes ValidateSet issues entirely
+        $response = Invoke-PnPSPRestMethod -Url "/_api/web?`$select=LastItemModifiedDate" -Method Get -ErrorAction Stop
+        return $response.LastItemModifiedDate
     }
     catch {
         return $null
