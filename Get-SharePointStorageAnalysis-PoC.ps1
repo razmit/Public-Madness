@@ -262,6 +262,29 @@ function Get-SiteLastActivity {
     }
 }
 
+# Recursive helper: walk the children map upward and sum leaf storage values
+function Get-RolledUpStorage {
+    param(
+        [string]$Url,
+        [hashtable]$StorageMap,
+        [hashtable]$ChildrenMap
+    )
+
+    $url = $Url.TrimEnd('/')
+
+    if (-not $ChildrenMap.ContainsKey($url)) {
+        # Leaf node: return the value we actually queried
+        return $StorageMap[$url]
+    }
+
+    $total = [double]0
+    foreach ($childUrl in $ChildrenMap[$url]) {
+        $childStorage = Get-RolledUpStorage -Url $childUrl -StorageMap $StorageMap -ChildrenMap $ChildrenMap
+        if ($null -ne $childStorage) { $total += $childStorage }
+    }
+    return [math]::Round($total, 4)
+}
+
 # Main execution
 try {
     Write-Host "`n======================================================" -ForegroundColor Cyan
@@ -317,53 +340,98 @@ try {
                 continue
             }
 
-            # Process each subsite to get storage
-            Write-Host "  Analyzing subsite storage..." -ForegroundColor Yellow
-            $subsiteData = @()
+            # --- Build parent-child map from the subsite list ---
+            $childrenMap = @{}
+            foreach ($sub in $subsites) {
+                $url = $sub.Url.TrimEnd('/')
+                $parentUrl = $url.Substring(0, $url.LastIndexOf('/'))
+                if (-not $childrenMap.ContainsKey($parentUrl)) {
+                    $childrenMap[$parentUrl] = [System.Collections.Generic.List[string]]::new()
+                }
+                $childrenMap[$parentUrl].Add($url)
+            }
+
+            # --- First pass: connect to every subsite once ---
+            # Collect owners + last activity for all, and run the Search query ONLY
+            # for leaf nodes (subsites with no children). This keeps each search
+            # scoped to the smallest possible file set, avoiding the 10k cap on
+            # the large parent/root nodes whose storage we'll derive by summing.
+            Write-Host "  Analyzing subsites (leaf-first storage, then rollup)..." -ForegroundColor Yellow
+            $storageMap  = @{}  # url (trimmed) -> StorageGB from search query
+            $metadataMap = @{}  # url (trimmed) -> owners, lastActivity, title
 
             $subsiteCount = 0
             foreach ($subsite in $subsites) {
                 $subsiteCount++
-                Write-Progress -Activity "Processing subsites for $siteName" -Status "Subsite $subsiteCount of $($subsites.Count)" -PercentComplete (($subsiteCount / $subsites.Count) * 100)
+                $url    = $subsite.Url.TrimEnd('/')
+                $isLeaf = -not $childrenMap.ContainsKey($url)
+
+                Write-Progress -Activity "Processing subsites for $siteName" `
+                    -Status "[$subsiteCount/$($subsites.Count)] $($subsite.Title)$(if ($isLeaf) { ' [LEAF]' })" `
+                    -PercentComplete (($subsiteCount / $subsites.Count) * 100)
 
                 try {
-                    # Connect to subsite
                     Connect-PnPOnline -Url $subsite.Url -Interactive -ErrorAction Stop
 
-                    # Get storage
-                    $storage = Get-WebStorageUsage -WebUrl $subsite.Url
+                    # Storage query only on leaf nodes
+                    $storageMap[$url] = if ($isLeaf) {
+                        Get-WebStorageUsage -WebUrl $subsite.Url
+                    } else {
+                        $null   # filled in during rollup
+                    }
 
-                    # Get owners
-                    $owners = Get-SiteOwners -SiteUrl $subsite.Url
-
-                    # Get last activity
-                    $lastActivity = Get-SiteLastActivity -SiteUrl $subsite.Url
-
-                    $subsiteData += [PSCustomObject]@{
-                        SiteCollectionName = $siteName
-                        SiteCollectionUrl = $siteUrl
-                        SiteCollectionStorageGB = $siteStorageGB
-                        SubsiteUrl = $subsite.Url
-                        SubsiteTitle = $subsite.Title
-                        SubsiteStorageGB = $storage
-                        Owners = $owners
-                        LastActivity = $lastActivity
+                    $metadataMap[$url] = @{
+                        Title        = $subsite.Title
+                        Owners       = Get-SiteOwners      -SiteUrl $subsite.Url
+                        LastActivity = Get-SiteLastActivity -SiteUrl $subsite.Url
+                        IsLeaf       = $isLeaf
                     }
 
                     $script:TotalSubsitesProcessed++
                 }
                 catch {
                     Write-Warning "    Error processing subsite $($subsite.Url): $($_.Exception.Message)"
-                    $script:Errors += [PSCustomObject]@{
-                        Site = $subsite.Url
-                        Error = $_.Exception.Message
+                    $storageMap[$url]  = $null
+                    $metadataMap[$url] = @{
+                        Title        = $subsite.Title
+                        Owners       = "Error"
+                        LastActivity = $null
+                        IsLeaf       = $isLeaf
                     }
+                    $script:Errors += [PSCustomObject]@{ Site = $subsite.Url; Error = $_.Exception.Message }
+                }
+                finally {
+                    if (Get-PnPConnection -ErrorAction SilentlyContinue) { Disconnect-PnPOnline }
                 }
             }
             Write-Progress -Activity "Processing subsites for $siteName" -Completed
 
-            # Sort subsites by storage and take top percentage
-            $topPercentCount = [math]::Ceiling($subsiteData.Count * ($TopSubsitesPercentage / 100))
+            # --- Second pass: roll leaf storage up to all parent nodes ---
+            foreach ($sub in $subsites) {
+                $url = $sub.Url.TrimEnd('/')
+                if (-not $metadataMap[$url].IsLeaf) {
+                    $storageMap[$url] = Get-RolledUpStorage -Url $url -StorageMap $storageMap -ChildrenMap $childrenMap
+                }
+            }
+
+            # --- Build the flat result list ---
+            $subsiteData = foreach ($sub in $subsites) {
+                $url = $sub.Url.TrimEnd('/')
+                [PSCustomObject]@{
+                    SiteCollectionName      = $siteName
+                    SiteCollectionUrl       = $siteUrl
+                    SiteCollectionStorageGB = $siteStorageGB
+                    SubsiteUrl              = $url
+                    SubsiteTitle            = $metadataMap[$url].Title
+                    SubsiteStorageGB        = $storageMap[$url]
+                    IsLeafNode              = $metadataMap[$url].IsLeaf
+                    Owners                  = $metadataMap[$url].Owners
+                    LastActivity            = $metadataMap[$url].LastActivity
+                }
+            }
+
+            # Sort by storage and take top percentage
+            $topPercentCount = [math]::Ceiling(@($subsiteData).Count * ($TopSubsitesPercentage / 100))
             $topSubsites = $subsiteData | Sort-Object -Property SubsiteStorageGB -Descending | Select-Object -First $topPercentCount
 
             Write-Host "  Including top $topPercentCount subsites (top $TopSubsitesPercentage%)" -ForegroundColor Green
