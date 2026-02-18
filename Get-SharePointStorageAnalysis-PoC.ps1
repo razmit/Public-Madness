@@ -185,15 +185,16 @@ function Get-WebStorageUsage {
         foreach ($list in $listsResponse.value) {
             if ($list.ItemCount -eq 0) { continue }
 
-            # Paginate through items, summing File_x0020_Size
-            $nextLink = "/_api/web/lists(guid'$($list.Id)')/items?`$select=File_x0020_Size&`$top=5000"
+            # Expand the File entity to get Length. Filter to files only (FSObjType eq 0)
+            # so folder rows (which have no File) are skipped automatically.
+            $nextLink = "/_api/web/lists(guid'$($list.Id)')/items?`$filter=FSObjType eq 0&`$select=File/Length&`$expand=File&`$top=5000"
 
             while ($nextLink) {
                 $itemsResponse = Invoke-PnPSPRestMethod -Url $nextLink -Method Get -ErrorAction Stop
 
                 foreach ($item in $itemsResponse.value) {
-                    if ($null -ne $item.File_x0020_Size -and $item.File_x0020_Size -gt 0) {
-                        $totalBytes += [long]$item.File_x0020_Size
+                    if ($null -ne $item.File -and $item.File.Length -gt 0) {
+                        $totalBytes += [long]$item.File.Length
                     }
                 }
 
