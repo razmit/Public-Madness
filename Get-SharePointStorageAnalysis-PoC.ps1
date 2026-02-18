@@ -168,9 +168,12 @@ function Get-AllSubsites {
 }
 
 # Function to get storage usage for a web
-# Uses REST API to sum file sizes across all document libraries (BaseTemplate 101).
-# Note: this counts current file versions only, not version history - good enough for
-# ranking purposes but will be lower than the Admin Center figure.
+# Uses the SharePoint Search API to sum file sizes, which bypasses the List View
+# Threshold entirely. The search index exposes a 'Size' managed property per file.
+# Note: counts current file versions only (search index does not include version history),
+# so numbers will be lower than Admin Center - fine for ranking purposes.
+# Hard ceiling: Search API returns at most 10,000 rows total (500 per page x 20 pages).
+# Sites with more indexed files will have their storage understated with a warning.
 function Get-WebStorageUsage {
     param(
         [string]$WebUrl
@@ -178,34 +181,36 @@ function Get-WebStorageUsage {
 
     try {
         $totalBytes = [long]0
+        $startRow   = 0
+        $batchSize  = 500
+        $totalRows  = 1  # Seed value so the loop is entered at least once
 
-        # Get all document libraries in this web (non-hidden, BaseTemplate 101)
-        $listsResponse = Invoke-PnPSPRestMethod -Url "/_api/web/lists?`$filter=Hidden eq false and BaseTemplate eq 101&`$select=Id,Title,ItemCount" -Method Get -ErrorAction Stop
+        while ($startRow -lt $totalRows -and $startRow -lt 10000) {
+            # IsDocument:1 restricts to files only (excludes list items, pages, etc.)
+            # path: scopes to this web and everything beneath it
+            $queryText   = "path:`"$WebUrl`" IsDocument:1"
+            $encodedQuery = [Uri]::EscapeDataString($queryText)
+            $url = "/_api/search/query?querytext='$encodedQuery'&selectproperties='Size'&trimduplicates=false&rowlimit=$batchSize&startrow=$startRow"
 
-        foreach ($list in $listsResponse.value) {
-            if ($list.ItemCount -eq 0) { continue }
+            $response    = Invoke-PnPSPRestMethod -Url $url -Method Get -ErrorAction Stop
+            $relevant    = $response.PrimaryQueryResult.RelevantResults
+            $totalRows   = $relevant.TotalRows
 
-            # Expand the File entity to get Length. Filter to files only (FSObjType eq 0)
-            # so folder rows (which have no File) are skipped automatically.
-            $nextLink = "/_api/web/lists(guid'$($list.Id)')/items?`$filter=FSObjType eq 0&`$select=File/Length&`$expand=File&`$top=5000"
+            if ($totalRows -eq 0) { break }
 
-            while ($nextLink) {
-                $itemsResponse = Invoke-PnPSPRestMethod -Url $nextLink -Method Get -ErrorAction Stop
+            # Warn once if we will be capped before reading all files
+            if ($startRow -eq 0 -and $totalRows -gt 10000) {
+                Write-Warning "  [SEARCH CAP] $WebUrl has $totalRows indexed files; only the first 10,000 are counted. Storage will be understated."
+            }
 
-                foreach ($item in $itemsResponse.value) {
-                    if ($null -ne $item.File -and $item.File.Length -gt 0) {
-                        $totalBytes += [long]$item.File.Length
-                    }
-                }
-
-                # Follow OData next page link if present
-                if ($itemsResponse.'odata.nextLink') {
-                    $nextLink = "/_api" + ($itemsResponse.'odata.nextLink' -split '/_api',2)[1]
-                }
-                else {
-                    $nextLink = $null
+            foreach ($row in $relevant.Table.Rows) {
+                $sizeProp = $row.Cells | Where-Object { $_.Key -eq "Size" }
+                if ($sizeProp -and $null -ne $sizeProp.Value) {
+                    $totalBytes += [long]$sizeProp.Value
                 }
             }
+
+            $startRow += $batchSize
         }
 
         return [math]::Round($totalBytes / 1GB, 4)
