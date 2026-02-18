@@ -1,0 +1,114 @@
+{
+  "monitorConfiguration": {
+    "monitorName": "Monitor Critical Flows - Production",
+    "description": "Monitors critical production flows for failures and sends alerts",
+    "recurrence": {
+      "interval": 15,
+      "frequency": "Minute"
+    },
+    "timezone": "Eastern Standard Time"
+  },
+  "flowsToMonitor": [
+    {
+      "flowId": "REPLACE-WITH-FLOW-ID-1",
+      "flowName": "Invoice Processing Flow",
+      "environment": "REPLACE-WITH-ENVIRONMENT-ID",
+      "criticality": "Critical",
+      "owner": "finance-team@company.com",
+      "description": "Processes incoming invoices from supplier portal",
+      "isActive": true
+    },
+    {
+      "flowId": "REPLACE-WITH-FLOW-ID-2",
+      "flowName": "Employee Onboarding Flow",
+      "environment": "REPLACE-WITH-ENVIRONMENT-ID",
+      "criticality": "High",
+      "owner": "hr-team@company.com",
+      "description": "Automates new employee setup tasks",
+      "isActive": true
+    },
+    {
+      "flowId": "REPLACE-WITH-FLOW-ID-3",
+      "flowName": "Daily Report Generator",
+      "environment": "REPLACE-WITH-ENVIRONMENT-ID",
+      "criticality": "Medium",
+      "owner": "ops-team@company.com",
+      "description": "Generates and emails daily operational reports",
+      "isActive": false
+    }
+  ],
+  "alertConfiguration": {
+    "enabled": true,
+    "alertRecipients": [
+      "admin@company.com",
+      "platform-team@company.com"
+    ],
+    "alertMethod": "Email",
+    "teamsChannel": {
+      "teamName": "Power Platform Team",
+      "channelName": "Flow Monitoring",
+      "enabled": false
+    },
+    "alertBatching": {
+      "enabled": false,
+      "batchWindowMinutes": 60
+    }
+  },
+  "monitoringSettings": {
+    "checkLastNRuns": 20,
+    "detectDisabledFlows": true,
+    "detectConsecutiveFailures": true,
+    "consecutiveFailureThreshold": 3,
+    "historicalTracking": {
+      "enabled": false,
+      "sharePointSiteUrl": "https://yourcompany.sharepoint.com/sites/PowerPlatform",
+      "listName": "Flow Monitoring History"
+    }
+  },
+  "errorCategorization": {
+    "enabled": true,
+    "categories": [
+      {
+        "category": "Authentication",
+        "errorCodes": ["Unauthorized", "Forbidden", "ConnectionAuthenticationFailed"],
+        "alertPriority": "High",
+        "recommendedAction": "Check connection references and re-authenticate"
+      },
+      {
+        "category": "Timeout",
+        "errorCodes": ["Timeout", "RequestTimeout"],
+        "alertPriority": "Medium",
+        "recommendedAction": "Review flow performance and external API response times"
+      },
+      {
+        "category": "Logic Error",
+        "errorCodes": ["InvalidTemplate", "ActionFailed", "ExpressionEvaluationFailed"],
+        "alertPriority": "High",
+        "recommendedAction": "Review flow logic and recent changes"
+      },
+      {
+        "category": "External Service",
+        "errorCodes": ["ServiceUnavailable", "BadGateway", "GatewayTimeout"],
+        "alertPriority": "Medium",
+        "recommendedAction": "Check external service status, may be temporary"
+      },
+      {
+        "category": "Rate Limit",
+        "errorCodes": ["TooManyRequests", "RateLimitExceeded"],
+        "alertPriority": "Low",
+        "recommendedAction": "Implement retry logic or reduce request frequency"
+      }
+    ]
+  },
+  "notes": {
+    "setupDate": "2026-01-18",
+    "setupBy": "Your Name",
+    "version": "1.0",
+    "nextReview": "2026-02-18",
+    "additionalNotes": [
+      "Start with 2-3 critical flows",
+      "Expand after 1 week of stable operation",
+      "Review alert frequency after first month"
+    ]
+  }
+}
