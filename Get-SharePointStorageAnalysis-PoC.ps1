@@ -222,24 +222,22 @@ function Get-WebStorageUsage {
 }
 
 # Function to get site owners
+# Accepts the full subsite URL and navigates to it via getwebbyurl() from whatever
+# root connection is currently active - no per-subsite reconnection required.
 function Get-SiteOwners {
     param(
         [string]$SiteUrl
     )
 
     try {
-        # Get the associated owner group directly - no -Includes needed
-        $ownerGroup = Get-PnPGroup -AssociatedOwnerGroup -ErrorAction Stop
-
-        if ($ownerGroup) {
-            $members = Get-PnPGroupMember -Group $ownerGroup -ErrorAction Stop
-            # Return display names, filtering out system/AD group entries if desired
-            $ownerNames = ($members | Where-Object { $_.PrincipalType -eq "User" } | Select-Object -ExpandProperty Title) -join "; "
-            return $(if ($ownerNames) { $ownerNames } else { "No individual owners (group-only)" })
-        }
-        else {
-            return "No owner group"
-        }
+        $serverRelUrl = ([System.Uri]$SiteUrl).AbsolutePath
+        $response = Invoke-PnPSPRestMethod `
+            -Url "/_api/web/getwebbyurl(@v)/AssociatedOwnerGroup/Users?@v='$serverRelUrl'&`$select=Title,PrincipalType" `
+            -Method Get -ErrorAction Stop
+        $owners = ($response.value |
+            Where-Object { $_.PrincipalType -eq 1 } |
+            Select-Object -ExpandProperty Title) -join "; "
+        return $(if ($owners) { $owners } else { "No individual owners (group-only)" })
     }
     catch {
         return "Unable to retrieve"
@@ -247,14 +245,17 @@ function Get-SiteOwners {
 }
 
 # Function to get last activity
+# Same pattern: navigate to the target web via getwebbyurl() from the root connection.
 function Get-SiteLastActivity {
     param(
         [string]$SiteUrl
     )
 
     try {
-        # Use REST API - avoids -Includes ValidateSet issues entirely
-        $response = Invoke-PnPSPRestMethod -Url "/_api/web?`$select=LastItemModifiedDate" -Method Get -ErrorAction Stop
+        $serverRelUrl = ([System.Uri]$SiteUrl).AbsolutePath
+        $response = Invoke-PnPSPRestMethod `
+            -Url "/_api/web/getwebbyurl(@v)?@v='$serverRelUrl'&`$select=LastItemModifiedDate" `
+            -Method Get -ErrorAction Stop
         return $response.LastItemModifiedDate
     }
     catch {
@@ -371,8 +372,8 @@ try {
                     -PercentComplete (($subsiteCount / $subsites.Count) * 100)
 
                 try {
-                    # Connect to subsite
-                    Connect-PnPOnline -Url $subsite.Url -clientId f6666fe0-04e6-419a-b4bb-4025060af8f5 -interactive -ErrorAction Stop
+                    # No reconnection needed - root site connection is reused for all
+                    # REST calls via getwebbyurl(), and Search uses path: scoping.
 
                     # Storage query only on leaf nodes
                     $storageMap[$url] = if ($isLeaf) {
@@ -383,8 +384,8 @@ try {
 
                     $metadataMap[$url] = @{
                         Title        = $subsite.Title
-                        Owners       = Get-SiteOwners      -SiteUrl $subsite.Url
-                        LastActivity = Get-SiteLastActivity -SiteUrl $subsite.Url
+                        Owners       = Get-SiteOwners       -SiteUrl $subsite.Url
+                        LastActivity = Get-SiteLastActivity  -SiteUrl $subsite.Url
                         IsLeaf       = $isLeaf
                     }
 
@@ -400,9 +401,6 @@ try {
                         IsLeaf       = $isLeaf
                     }
                     $script:Errors += [PSCustomObject]@{ Site = $subsite.Url; Error = $_.Exception.Message }
-                }
-                finally {
-                    if (Get-PnPConnection -ErrorAction SilentlyContinue) { Disconnect-PnPOnline }
                 }
             }
             Write-Progress -Activity "Processing subsites for $siteName" -Completed
