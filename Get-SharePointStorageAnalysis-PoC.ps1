@@ -82,6 +82,17 @@ function Read-ExcelFile {
 
         $data = Import-Excel -Path $FilePath
 
+        # Strip UTF-8 BOM (\uFEFF) from column names - SharePoint Admin Center exports
+        # prepend a BOM to the first column header, silently breaking property lookups.
+        $data = $data | ForEach-Object {
+            $row    = $_
+            $newRow = [ordered]@{}
+            foreach ($prop in $row.PSObject.Properties) {
+                $newRow[$prop.Name.TrimStart([char]0xFEFF)] = $prop.Value
+            }
+            [PSCustomObject]$newRow
+        }
+
         # Sort by storage and take top N
         $topSites = $data |
             Sort-Object -Property "Storage used (GB)" -Descending |
@@ -107,7 +118,8 @@ function Read-ExcelFile {
             # Get headers from first row
             $headers = @{}
             for ($col = 1; $col -le $usedRange.Columns.Count; $col++) {
-                $headerName = $worksheet.Cells.Item(1, $col).Text
+                # TrimStart strips BOM from the first column header
+                $headerName = $worksheet.Cells.Item(1, $col).Text.TrimStart([char]0xFEFF)
                 $headers[$col] = $headerName
             }
 
@@ -184,22 +196,24 @@ function Get-WebStorageUsage {
         $startRow   = 0
         $batchSize  = 500
         $totalRows  = 1  # Seed value so the loop is entered at least once
+        $isCapped   = $false
 
         while ($startRow -lt $totalRows -and $startRow -lt 10000) {
             # IsDocument:1 restricts to files only (excludes list items, pages, etc.)
             # path: scopes to this web and everything beneath it
-            $queryText   = "path:`"$WebUrl`" IsDocument:1"
+            $queryText    = "path:`"$WebUrl`" IsDocument:1"
             $encodedQuery = [Uri]::EscapeDataString($queryText)
             $url = "/_api/search/query?querytext='$encodedQuery'&selectproperties='Size'&trimduplicates=false&rowlimit=$batchSize&startrow=$startRow"
 
-            $response    = Invoke-PnPSPRestMethod -Url $url -Method Get -ErrorAction Stop
-            $relevant    = $response.PrimaryQueryResult.RelevantResults
-            $totalRows   = $relevant.TotalRows
+            $response  = Invoke-PnPSPRestMethod -Url $url -Method Get -ErrorAction Stop
+            $relevant  = $response.PrimaryQueryResult.RelevantResults
+            $totalRows = $relevant.TotalRows
 
             if ($totalRows -eq 0) { break }
 
-            # Warn once if we will be capped before reading all files
+            # Warn and flag once when the 10k ceiling is confirmed
             if ($startRow -eq 0 -and $totalRows -gt 10000) {
+                $isCapped = $true
                 Write-Warning "  [SEARCH CAP] $WebUrl has $totalRows indexed files; only the first 10,000 are counted. Storage will be understated."
             }
 
@@ -213,11 +227,14 @@ function Get-WebStorageUsage {
             $startRow += $batchSize
         }
 
-        return [math]::Round($totalBytes / 1GB, 4)
+        return [PSCustomObject]@{
+            StorageGB = [math]::Round($totalBytes / 1GB, 4)
+            IsCapped  = $isCapped
+        }
     }
     catch {
         Write-Warning "Could not calculate storage for $WebUrl : $($_.Exception.Message)"
-        return $null
+        return [PSCustomObject]@{ StorageGB = $null; IsCapped = $false }
     }
 }
 
@@ -230,9 +247,11 @@ function Get-SiteOwners {
     )
 
     try {
-        $serverRelUrl = ([System.Uri]$SiteUrl).AbsolutePath
+        # Direct getwebbyurl('...') avoids the @v OData alias which Invoke-PnPSPRestMethod
+        # can URL-encode before sending, breaking the binding.
+        $serverRelUrl = ([System.Uri]$SiteUrl).AbsolutePath.Replace("'", "''")
         $response = Invoke-PnPSPRestMethod `
-            -Url "/_api/web/getwebbyurl(@v)/AssociatedOwnerGroup/Users?@v='$serverRelUrl'&`$select=Title,PrincipalType" `
+            -Url "/_api/web/getwebbyurl('$serverRelUrl')/AssociatedOwnerGroup/Users?`$select=Title,PrincipalType" `
             -Method Get -ErrorAction Stop
         $owners = ($response.value |
             Where-Object { $_.PrincipalType -eq 1 } |
@@ -252,9 +271,9 @@ function Get-SiteLastActivity {
     )
 
     try {
-        $serverRelUrl = ([System.Uri]$SiteUrl).AbsolutePath
+        $serverRelUrl = ([System.Uri]$SiteUrl).AbsolutePath.Replace("'", "''")
         $response = Invoke-PnPSPRestMethod `
-            -Url "/_api/web/getwebbyurl(@v)?@v='$serverRelUrl'&`$select=LastItemModifiedDate" `
+            -Url "/_api/web/getwebbyurl('$serverRelUrl')?`$select=LastItemModifiedDate" `
             -Method Get -ErrorAction Stop
         return $response.LastItemModifiedDate
     }
@@ -358,7 +377,8 @@ try {
             # scoped to the smallest possible file set, avoiding the 10k cap on
             # the large parent/root nodes whose storage we'll derive by summing.
             Write-Host "  Analyzing subsites (leaf-first storage, then rollup)..." -ForegroundColor Yellow
-            $storageMap  = @{}  # url (trimmed) -> StorageGB from search query
+            $storageMap  = @{}  # url (trimmed) -> StorageGB
+            $cappedMap   = @{}  # url (trimmed) -> $true if search cap was hit for this node or any descendant
             $metadataMap = @{}  # url (trimmed) -> owners, lastActivity, title
 
             $subsiteCount = 0
@@ -376,10 +396,13 @@ try {
                     # REST calls via getwebbyurl(), and Search uses path: scoping.
 
                     # Storage query only on leaf nodes
-                    $storageMap[$url] = if ($isLeaf) {
-                        Get-WebStorageUsage -WebUrl $subsite.Url
+                    if ($isLeaf) {
+                        $result           = Get-WebStorageUsage -WebUrl $subsite.Url
+                        $storageMap[$url] = $result.StorageGB
+                        $cappedMap[$url]  = $result.IsCapped
                     } else {
-                        $null   # filled in during rollup
+                        $storageMap[$url] = $null   # filled in during rollup
+                        $cappedMap[$url]  = $false  # updated during rollup
                     }
 
                     $metadataMap[$url] = @{
@@ -405,11 +428,16 @@ try {
             }
             Write-Progress -Activity "Processing subsites for $siteName" -Completed
 
-            # --- Second pass: roll leaf storage up to all parent nodes ---
-            foreach ($sub in $subsites) {
+            # --- Second pass: roll leaf storage and cap flag up to all parent nodes ---
+            # Process deepest nodes first so each parent can read already-computed children.
+            $subsitesByDepth = $subsites | Sort-Object -Property { $_.Url.TrimEnd('/').Split('/').Count } -Descending
+            foreach ($sub in $subsitesByDepth) {
                 $url = $sub.Url.TrimEnd('/')
                 if (-not $metadataMap[$url].IsLeaf) {
                     $storageMap[$url] = Get-RolledUpStorage -Url $url -StorageMap $storageMap -ChildrenMap $childrenMap
+                    # Parent is flagged as capped if any immediate child is capped
+                    # (children are already processed since we go deepest-first)
+                    $cappedMap[$url]  = ($childrenMap[$url] | Where-Object { $cappedMap[$_] -eq $true }).Count -gt 0
                 }
             }
 
@@ -424,6 +452,7 @@ try {
                     SubsiteTitle            = $metadataMap[$url].Title
                     SubsiteStorageGB        = $storageMap[$url]
                     IsLeafNode              = $metadataMap[$url].IsLeaf
+                    IsStorageCapped         = $cappedMap[$url]
                     Owners                  = $metadataMap[$url].Owners
                     LastActivity            = $metadataMap[$url].LastActivity
                 }
