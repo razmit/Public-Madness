@@ -82,13 +82,14 @@ function Read-ExcelFile {
 
         $data = Import-Excel -Path $FilePath
 
-        # Strip UTF-8 BOM (\uFEFF) from column names - SharePoint Admin Center exports
-        # prepend a BOM to the first column header, silently breaking property lookups.
+        # Strip UTF-8 BOM (\uFEFF) and literal quote characters from column names.
+        # SharePoint Admin Center exports prepend BOM and wrap some column names in quotes.
         $data = $data | ForEach-Object {
             $row    = $_
             $newRow = [ordered]@{}
             foreach ($prop in $row.PSObject.Properties) {
-                $newRow[$prop.Name.TrimStart([char]0xFEFF)] = $prop.Value
+                $cleanName = $prop.Name.TrimStart([char]0xFEFF).Trim('"').Trim("'")
+                $newRow[$cleanName] = $prop.Value
             }
             [PSCustomObject]$newRow
         }
@@ -115,11 +116,10 @@ function Read-ExcelFile {
             $worksheet = $workbook.Sheets.Item(1)
             $usedRange = $worksheet.UsedRange
 
-            # Get headers from first row
+            # Get headers from first row, stripping BOM and quotes
             $headers = @{}
             for ($col = 1; $col -le $usedRange.Columns.Count; $col++) {
-                # TrimStart strips BOM from the first column header
-                $headerName = $worksheet.Cells.Item(1, $col).Text.TrimStart([char]0xFEFF)
+                $headerName = $worksheet.Cells.Item(1, $col).Text.TrimStart([char]0xFEFF).Trim('"').Trim("'")
                 $headers[$col] = $headerName
             }
 
@@ -152,6 +152,7 @@ function Read-ExcelFile {
 }
 
 # Function to get all subsites recursively
+# Loads LastItemModifiedDate and AssociatedOwnerGroup properties for all webs
 function Get-AllSubsites {
     param(
         [string]$SiteUrl,
@@ -161,10 +162,18 @@ function Get-AllSubsites {
     $subsites = @()
 
     try {
-        # Get immediate subsites
+        # Get all subsites recursively
         $webs = Get-PnPSubWeb -Recurse -IncludeRootWeb -ErrorAction Stop
 
         foreach ($web in $webs) {
+            # Load properties we need - LastItemModifiedDate is already loaded
+            # but AssociatedOwnerGroup needs explicit loading
+            try {
+                Get-PnPProperty -ClientObject $web -Property AssociatedOwnerGroup -ErrorAction SilentlyContinue | Out-Null
+            }
+            catch {
+                # If it fails, the property will be null - that's fine
+            }
             $subsites += $web
         }
     }
@@ -235,50 +244,6 @@ function Get-WebStorageUsage {
     catch {
         Write-Warning "Could not calculate storage for $WebUrl : $($_.Exception.Message)"
         return [PSCustomObject]@{ StorageGB = $null; IsCapped = $false }
-    }
-}
-
-# Function to get site owners
-# Accepts the full subsite URL and navigates to it via getwebbyurl() from whatever
-# root connection is currently active - no per-subsite reconnection required.
-function Get-SiteOwners {
-    param(
-        [string]$SiteUrl
-    )
-
-    try {
-        # Direct getwebbyurl('...') avoids the @v OData alias which Invoke-PnPSPRestMethod
-        # can URL-encode before sending, breaking the binding.
-        $serverRelUrl = ([System.Uri]$SiteUrl).AbsolutePath.Replace("'", "''")
-        $response = Invoke-PnPSPRestMethod `
-            -Url "/_api/web/getwebbyurl('$serverRelUrl')/AssociatedOwnerGroup/Users?`$select=Title,PrincipalType" `
-            -Method Get -ErrorAction Stop
-        $owners = ($response.value |
-            Where-Object { $_.PrincipalType -eq 1 } |
-            Select-Object -ExpandProperty Title) -join "; "
-        return $(if ($owners) { $owners } else { "No individual owners (group-only)" })
-    }
-    catch {
-        return "Unable to retrieve"
-    }
-}
-
-# Function to get last activity
-# Same pattern: navigate to the target web via getwebbyurl() from the root connection.
-function Get-SiteLastActivity {
-    param(
-        [string]$SiteUrl
-    )
-
-    try {
-        $serverRelUrl = ([System.Uri]$SiteUrl).AbsolutePath.Replace("'", "''")
-        $response = Invoke-PnPSPRestMethod `
-            -Url "/_api/web/getwebbyurl('$serverRelUrl')?`$select=LastItemModifiedDate" `
-            -Method Get -ErrorAction Stop
-        return $response.LastItemModifiedDate
-    }
-    catch {
-        return $null
     }
 }
 
@@ -405,10 +370,23 @@ try {
                         $cappedMap[$url]  = $false  # updated during rollup
                     }
 
+                    # Get owners from the AssociatedOwnerGroup property (already loaded)
+                    $owners = "No owner group"
+                    if ($subsite.AssociatedOwnerGroup) {
+                        try {
+                            $members = Get-PnPGroupMember -Group $subsite.AssociatedOwnerGroup -ErrorAction Stop
+                            $ownerNames = ($members | Where-Object { $_.PrincipalType -eq "User" } | Select-Object -ExpandProperty Title) -join "; "
+                            $owners = if ($ownerNames) { $ownerNames } else { "No individual owners (group-only)" }
+                        }
+                        catch {
+                            $owners = "Unable to retrieve"
+                        }
+                    }
+
                     $metadataMap[$url] = @{
                         Title        = $subsite.Title
-                        Owners       = Get-SiteOwners       -SiteUrl $subsite.Url
-                        LastActivity = Get-SiteLastActivity  -SiteUrl $subsite.Url
+                        Owners       = $owners
+                        LastActivity = $subsite.LastItemModifiedDate
                         IsLeaf       = $isLeaf
                     }
 
