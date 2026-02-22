@@ -152,7 +152,8 @@ function Read-ExcelFile {
 }
 
 # Function to get all subsites recursively
-# Loads LastItemModifiedDate and AssociatedOwnerGroup properties for all webs
+# Loads all properties we need: AssociatedOwnerGroup, WebTemplate, Created
+# (LastItemModifiedDate is already loaded by default)
 function Get-AllSubsites {
     param(
         [string]$SiteUrl,
@@ -166,13 +167,12 @@ function Get-AllSubsites {
         $webs = Get-PnPSubWeb -Recurse -IncludeRootWeb -ErrorAction Stop
 
         foreach ($web in $webs) {
-            # Load properties we need - LastItemModifiedDate is already loaded
-            # but AssociatedOwnerGroup needs explicit loading
+            # Load additional properties we need beyond the defaults
             try {
-                Get-PnPProperty -ClientObject $web -Property AssociatedOwnerGroup -ErrorAction SilentlyContinue | Out-Null
+                Get-PnPProperty -ClientObject $web -Property AssociatedOwnerGroup,WebTemplate,Created -ErrorAction SilentlyContinue | Out-Null
             }
             catch {
-                # If it fails, the property will be null - that's fine
+                # If loading fails, properties will be null - that's fine
             }
             $subsites += $web
         }
@@ -238,12 +238,13 @@ function Get-WebStorageUsage {
 
         return [PSCustomObject]@{
             StorageGB = [math]::Round($totalBytes / 1GB, 4)
+            FileCount = [int]$totalRows
             IsCapped  = $isCapped
         }
     }
     catch {
         Write-Warning "Could not calculate storage for $WebUrl : $($_.Exception.Message)"
-        return [PSCustomObject]@{ StorageGB = $null; IsCapped = $false }
+        return [PSCustomObject]@{ StorageGB = $null; FileCount = 0; IsCapped = $false }
     }
 }
 
@@ -268,6 +269,29 @@ function Get-RolledUpStorage {
         if ($null -ne $childStorage) { $total += $childStorage }
     }
     return [math]::Round($total, 4)
+}
+
+# Recursive helper: walk the children map upward and sum leaf file counts
+function Get-RolledUpFileCount {
+    param(
+        [string]$Url,
+        [hashtable]$FileCountMap,
+        [hashtable]$ChildrenMap
+    )
+
+    $url = $Url.TrimEnd('/')
+
+    if (-not $ChildrenMap.ContainsKey($url)) {
+        # Leaf node: return the value we actually queried
+        return $FileCountMap[$url]
+    }
+
+    $total = [int]0
+    foreach ($childUrl in $ChildrenMap[$url]) {
+        $childCount = Get-RolledUpFileCount -Url $childUrl -FileCountMap $FileCountMap -ChildrenMap $ChildrenMap
+        if ($null -ne $childCount) { $total += $childCount }
+    }
+    return $total
 }
 
 # Main execution
@@ -342,9 +366,10 @@ try {
             # scoped to the smallest possible file set, avoiding the 10k cap on
             # the large parent/root nodes whose storage we'll derive by summing.
             Write-Host "  Analyzing subsites (leaf-first storage, then rollup)..." -ForegroundColor Yellow
-            $storageMap  = @{}  # url (trimmed) -> StorageGB
-            $cappedMap   = @{}  # url (trimmed) -> $true if search cap was hit for this node or any descendant
-            $metadataMap = @{}  # url (trimmed) -> owners, lastActivity, title
+            $storageMap   = @{}  # url (trimmed) -> StorageGB
+            $fileCountMap = @{}  # url (trimmed) -> FileCount
+            $cappedMap    = @{}  # url (trimmed) -> $true if search cap was hit for this node or any descendant
+            $metadataMap  = @{}  # url (trimmed) -> owners, lastActivity, title, webTemplate, created
 
             $subsiteCount = 0
             foreach ($subsite in $subsites) {
@@ -360,14 +385,16 @@ try {
                     # No reconnection needed - root site connection is reused for all
                     # REST calls via getwebbyurl(), and Search uses path: scoping.
 
-                    # Storage query only on leaf nodes
+                    # Storage and file count query only on leaf nodes
                     if ($isLeaf) {
-                        $result           = Get-WebStorageUsage -WebUrl $subsite.Url
-                        $storageMap[$url] = $result.StorageGB
-                        $cappedMap[$url]  = $result.IsCapped
+                        $result              = Get-WebStorageUsage -WebUrl $subsite.Url
+                        $storageMap[$url]    = $result.StorageGB
+                        $fileCountMap[$url]  = $result.FileCount
+                        $cappedMap[$url]     = $result.IsCapped
                     } else {
-                        $storageMap[$url] = $null   # filled in during rollup
-                        $cappedMap[$url]  = $false  # updated during rollup
+                        $storageMap[$url]    = $null   # filled in during rollup
+                        $fileCountMap[$url]  = 0       # filled in during rollup
+                        $cappedMap[$url]     = $false  # updated during rollup
                     }
 
                     # Get owners from the AssociatedOwnerGroup property (already loaded)
@@ -387,6 +414,8 @@ try {
                         Title        = $subsite.Title
                         Owners       = $owners
                         LastActivity = $subsite.LastItemModifiedDate
+                        WebTemplate  = $subsite.WebTemplate
+                        Created      = $subsite.Created
                         IsLeaf       = $isLeaf
                     }
 
@@ -394,11 +423,15 @@ try {
                 }
                 catch {
                     Write-Warning "    Error processing subsite $($subsite.Url): $($_.Exception.Message)"
-                    $storageMap[$url]  = $null
+                    $storageMap[$url]    = $null
+                    $fileCountMap[$url]  = 0
+                    $cappedMap[$url]     = $false
                     $metadataMap[$url] = @{
                         Title        = $subsite.Title
                         Owners       = "Error"
                         LastActivity = $null
+                        WebTemplate  = $subsite.WebTemplate
+                        Created      = $subsite.Created
                         IsLeaf       = $isLeaf
                     }
                     $script:Errors += [PSCustomObject]@{ Site = $subsite.Url; Error = $_.Exception.Message }
@@ -406,22 +439,45 @@ try {
             }
             Write-Progress -Activity "Processing subsites for $siteName" -Completed
 
-            # --- Second pass: roll leaf storage and cap flag up to all parent nodes ---
+            # --- Second pass: roll leaf storage, file count, and cap flag up to all parent nodes ---
             # Process deepest nodes first so each parent can read already-computed children.
             $subsitesByDepth = $subsites | Sort-Object -Property { $_.Url.TrimEnd('/').Split('/').Count } -Descending
             foreach ($sub in $subsitesByDepth) {
                 $url = $sub.Url.TrimEnd('/')
                 if (-not $metadataMap[$url].IsLeaf) {
-                    $storageMap[$url] = Get-RolledUpStorage -Url $url -StorageMap $storageMap -ChildrenMap $childrenMap
+                    $storageMap[$url]   = Get-RolledUpStorage   -Url $url -StorageMap $storageMap     -ChildrenMap $childrenMap
+                    $fileCountMap[$url] = Get-RolledUpFileCount -Url $url -FileCountMap $fileCountMap -ChildrenMap $childrenMap
                     # Parent is flagged as capped if any immediate child is capped
                     # (children are already processed since we go deepest-first)
-                    $cappedMap[$url]  = ($childrenMap[$url] | Where-Object { $cappedMap[$_] -eq $true }).Count -gt 0
+                    $cappedMap[$url]    = ($childrenMap[$url] | Where-Object { $cappedMap[$_] -eq $true }).Count -gt 0
                 }
             }
 
             # --- Build the flat result list ---
             $subsiteData = foreach ($sub in $subsites) {
                 $url = $sub.Url.TrimEnd('/')
+
+                # Derive IsClassic from WebTemplate
+                # Classic templates: STS#0 (team site), BLOG#0, WIKI#0, etc.
+                # Modern templates: GROUP#0 (Office 365 group site), SITEPAGEPUBLISHING#0, STS#3 (modern team w/o group)
+                $webTemplate = $metadataMap[$url].WebTemplate
+                $isClassic = if ($webTemplate) {
+                    $webTemplate -notmatch '^(GROUP|SITEPAGEPUBLISHING)#' -and $webTemplate -ne 'STS#3'
+                } else {
+                    $null  # Unknown if WebTemplate is missing
+                }
+
+                # Derive SubsiteDepth from URL segment count
+                # e.g., /sites/Teams = depth 0 (root), /sites/Teams/Alliance = depth 1, etc.
+                $subsiteDepth = ($url -split '/').Count - ($siteUrl.TrimEnd('/') -split '/').Count
+
+                # Derive DirectChildCount from childrenMap
+                $directChildCount = if ($childrenMap.ContainsKey($url)) {
+                    $childrenMap[$url].Count
+                } else {
+                    0
+                }
+
                 [PSCustomObject]@{
                     SiteCollectionName      = $siteName
                     SiteCollectionUrl       = $siteUrl
@@ -429,10 +485,16 @@ try {
                     SubsiteUrl              = $url
                     SubsiteTitle            = $metadataMap[$url].Title
                     SubsiteStorageGB        = $storageMap[$url]
+                    FileCount               = $fileCountMap[$url]
                     IsLeafNode              = $metadataMap[$url].IsLeaf
                     IsStorageCapped         = $cappedMap[$url]
-                    Owners                  = $metadataMap[$url].Owners
+                    SubsiteDepth            = $subsiteDepth
+                    DirectChildCount        = $directChildCount
+                    WebTemplate             = $webTemplate
+                    IsClassic               = $isClassic
+                    Created                 = $metadataMap[$url].Created
                     LastActivity            = $metadataMap[$url].LastActivity
+                    Owners                  = $metadataMap[$url].Owners
                 }
             }
 
