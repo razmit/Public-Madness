@@ -7,6 +7,9 @@ replacements:
   rsmus: company
   rsmnet: companynet
   mcgladrey: company_old
+  E095713: LOCAL_USER
+  National Tax PMO Owners: Perm_Group_1
+  Tax Services Project Owners: Perm_Group_2
   
   # SharePoint URLs
   rsmnet.sharepoint.com: companynet.sharepoint.com
