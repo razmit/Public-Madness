@@ -45,7 +45,13 @@ param(
     [int]$TopSitesCount = 3,
 
     [Parameter(Mandatory=$false)]
-    [int]$TopSubsitesPercentage = 20
+    [int]$TopSubsitesPercentage = 20,
+
+    [Parameter(Mandatory=$false)]
+    [string]$SharePointListUrl = "https://rsmnet.sharepoint.com/sites/YourTeamSite",
+
+    [Parameter(Mandatory=$false)]
+    [string]$ListName = "Storage Analysis"
 )
 
 # Check if PnP.PowerShell is available
@@ -294,11 +300,79 @@ function Get-RolledUpFileCount {
     return $total
 }
 
+# Function to write results to SharePoint List in batches
+function Write-ToSharePointList {
+    param(
+        [array]$Items,
+        [string]$ListUrl,
+        [string]$ListName,
+        [datetime]$RunDate
+    )
+
+    if ($Items.Count -eq 0) { return }
+
+    Write-Host "  Writing $($Items.Count) items to SharePoint List..." -ForegroundColor Yellow
+
+    try {
+        # Connect to the list site if not already connected, or reconnect if needed
+        $currentConnection = Get-PnPConnection -ErrorAction SilentlyContinue
+        if (-not $currentConnection -or $currentConnection.Url -ne $ListUrl) {
+            Connect-PnPOnline -Url $ListUrl -clientId f6666fe0-04e6-419a-b4bb-4025060af8f5 -Interactive -ErrorAction Stop
+        }
+
+        # Write items in batches of 100 to avoid overwhelming SharePoint
+        $batchSize = 100
+        $written = 0
+
+        for ($i = 0; $i -lt $Items.Count; $i += $batchSize) {
+            $batch = $Items[$i..[Math]::Min($i + $batchSize - 1, $Items.Count - 1)]
+
+            foreach ($item in $batch) {
+                $listItemValues = @{
+                    Title                     = $item.SubsiteTitle
+                    RunDate                   = $RunDate
+                    SiteCollectionName        = $item.SiteCollectionName
+                    SiteCollectionUrl         = $item.SiteCollectionUrl
+                    SiteCollectionStorageGB   = $item.SiteCollectionStorageGB
+                    SubsiteUrl                = $item.SubsiteUrl
+                    SubsiteTitle              = $item.SubsiteTitle
+                    SubsiteStorageGB          = $item.SubsiteStorageGB
+                    FileCount                 = $item.FileCount
+                    IsLeafNode                = $item.IsLeafNode
+                    IsStorageCapped           = $item.IsStorageCapped
+                    SubsiteDepth              = $item.SubsiteDepth
+                    DirectChildCount          = $item.DirectChildCount
+                    WebTemplate               = $item.WebTemplate
+                    IsClassic                 = $item.IsClassic
+                    Created                   = $item.Created
+                    LastActivity              = $item.LastActivity
+                    Owners                    = $item.Owners  # Semicolon-separated emails - SharePoint will auto-resolve
+                }
+
+                Add-PnPListItem -List $ListName -Values $listItemValues -ErrorAction Stop | Out-Null
+                $written++
+            }
+
+            Write-Progress -Activity "Writing to SharePoint List" -Status "$written / $($Items.Count)" -PercentComplete (($written / $Items.Count) * 100)
+        }
+
+        Write-Progress -Activity "Writing to SharePoint List" -Completed
+        Write-Host "  Successfully wrote $written items to list" -ForegroundColor Green
+    }
+    catch {
+        Write-Error "Failed to write to SharePoint List: $($_.Exception.Message)"
+        throw
+    }
+}
+
 # Main execution
 try {
     Write-Host "`n======================================================" -ForegroundColor Cyan
     Write-Host "SharePoint Storage Analysis - Proof of Concept" -ForegroundColor Cyan
     Write-Host "======================================================`n" -ForegroundColor Cyan
+
+    # Capture run timestamp for historical tracking
+    $script:RunDate = Get-Date
 
     # Read Excel file
     $topSites = Read-ExcelFile -FilePath $ExcelFilePath -TopN $TopSitesCount
@@ -398,12 +472,13 @@ try {
                     }
 
                     # Get owners from the AssociatedOwnerGroup property (already loaded)
+                    # Use Email instead of Title for SharePoint Person field resolution
                     $owners = "No owner group"
                     if ($subsite.AssociatedOwnerGroup) {
                         try {
                             $members = Get-PnPGroupMember -Group $subsite.AssociatedOwnerGroup -ErrorAction Stop
-                            $ownerNames = ($members | Where-Object { $_.PrincipalType -eq "User" } | Select-Object -ExpandProperty Title) -join "; "
-                            $owners = if ($ownerNames) { $ownerNames } else { "No individual owners (group-only)" }
+                            $ownerEmails = ($members | Where-Object { $_.PrincipalType -eq "User" } | Select-Object -ExpandProperty Email) -join "; "
+                            $owners = if ($ownerEmails) { $ownerEmails } else { "No individual owners (group-only)" }
                         }
                         catch {
                             $owners = "Unable to retrieve"
@@ -479,22 +554,24 @@ try {
                 }
 
                 [PSCustomObject]@{
-                    SiteCollectionName      = $siteName
-                    SiteCollectionUrl       = $siteUrl
-                    SiteCollectionStorageGB = $siteStorageGB
-                    SubsiteUrl              = $url
-                    SubsiteTitle            = $metadataMap[$url].Title
-                    SubsiteStorageGB        = $storageMap[$url]
-                    FileCount               = $fileCountMap[$url]
-                    IsLeafNode              = $metadataMap[$url].IsLeaf
-                    IsStorageCapped         = $cappedMap[$url]
-                    SubsiteDepth            = $subsiteDepth
-                    DirectChildCount        = $directChildCount
-                    WebTemplate             = $webTemplate
-                    IsClassic               = $isClassic
-                    Created                 = $metadataMap[$url].Created
-                    LastActivity            = $metadataMap[$url].LastActivity
-                    Owners                  = $metadataMap[$url].Owners
+                    # SharePoint List Column Types:
+                    RunDate                 = $script:RunDate            # DateTime (indexed for historical filtering)
+                    SiteCollectionName      = $siteName                  # Single line of text
+                    SiteCollectionUrl       = $siteUrl                   # Hyperlink or Single line of text
+                    SiteCollectionStorageGB = $siteStorageGB             # Number (with decimals)
+                    SubsiteUrl              = $url                       # Hyperlink or Single line of text
+                    SubsiteTitle            = $metadataMap[$url].Title   # Single line of text
+                    SubsiteStorageGB        = $storageMap[$url]          # Number (with decimals)
+                    FileCount               = $fileCountMap[$url]        # Number (no decimals)
+                    IsLeafNode              = $metadataMap[$url].IsLeaf  # Yes/No (boolean)
+                    IsStorageCapped         = $cappedMap[$url]           # Yes/No (boolean)
+                    SubsiteDepth            = $subsiteDepth              # Number (no decimals)
+                    DirectChildCount        = $directChildCount          # Number (no decimals)
+                    WebTemplate             = $webTemplate               # Single line of text
+                    IsClassic               = $isClassic                 # Yes/No (boolean) - can be null
+                    Created                 = $metadataMap[$url].Created # DateTime
+                    LastActivity            = $metadataMap[$url].LastActivity  # DateTime
+                    Owners                  = $metadataMap[$url].Owners  # Person or Group (allow multiple selections) - semicolon-separated emails
                 }
             }
 
@@ -506,6 +583,9 @@ try {
 
             # Add to results
             $results += $topSubsites
+
+            # Incrementally write to SharePoint List (crash-safe)
+            Write-ToSharePointList -Items $topSubsites -ListUrl $SharePointListUrl -ListName $ListName -RunDate $script:RunDate
 
             $script:TotalSitesProcessed++
             Write-Host "  Completed!`n" -ForegroundColor Green
@@ -525,7 +605,9 @@ try {
         }
     }
 
-    # Export results to CSV
+    # Export results to CSV (commented out - using SharePoint List instead)
+    # Uncomment this section if you need CSV export in addition to SharePoint List
+    <#
     Write-Host "`n======================================================" -ForegroundColor Cyan
     Write-Host "EXPORTING RESULTS" -ForegroundColor Cyan
     Write-Host "======================================================" -ForegroundColor Cyan
@@ -538,6 +620,7 @@ try {
     else {
         Write-Host "No results to export`n" -ForegroundColor Yellow
     }
+    #>
 
     # Summary
     Write-Host "======================================================" -ForegroundColor Cyan
