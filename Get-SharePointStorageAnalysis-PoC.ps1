@@ -344,7 +344,7 @@ function Write-ToSharePointList {
                     DirectChildCount          = $item.DirectChildCount
                     WebTemplate               = $item.WebTemplate
                     IsClassic                 = $item.IsClassic
-                    SiteCreated                   = $item.Created
+                    SiteCreated               = $item.SiteCreated
                     LastActivity              = $item.LastActivity
                     Owners                    = $item.Owners  # Semicolon-separated emails - SharePoint will auto-resolve
                 }
@@ -378,14 +378,22 @@ function Write-ToSharePointList {
                             $validOwners = @()
                             $ghostOwners = @()
 
+                            # Get all users from the list site once (more efficient than per-user lookups)
+                            # Match by Email property since Get-PnPUser -Identity doesn't accept plain emails
+                            try {
+                                $allSiteUsers = Get-PnPUser -ErrorAction Stop
+                                $siteUserEmails = $allSiteUsers | Where-Object { $_.Email } | Select-Object -ExpandProperty Email
+                            }
+                            catch {
+                                Write-Warning "  [USER LOOKUP FAILED] Could not retrieve site users for validation. Attempting write without Owners..."
+                                $siteUserEmails = @()
+                            }
+
                             foreach ($ownerEmail in $ownerList) {
-                                try {
-                                    # Try to resolve the user on the List site to validate they exist
-                                    Get-PnPUser -Identity $ownerEmail -ErrorAction Stop | Out-Null
+                                if ($siteUserEmails -contains $ownerEmail) {
                                     $validOwners += $ownerEmail
                                 }
-                                catch {
-                                    # User doesn't exist or is inactive
+                                else {
                                     $ghostOwners += $ownerEmail
                                 }
                             }
@@ -650,7 +658,7 @@ try {
                     DirectChildCount        = $directChildCount          # Number (no decimals)
                     WebTemplate             = $webTemplate               # Single line of text
                     IsClassic               = $isClassic                 # Yes/No (boolean) - can be null
-                    SiteCreated                 = $metadataMap[$url].Created # DateTime
+                    SiteCreated             = $metadataMap[$url].SiteCreated # DateTime
                     LastActivity            = $metadataMap[$url].LastActivity  # DateTime
                     Owners                  = $metadataMap[$url].Owners  # Person or Group (allow multiple selections) - semicolon-separated emails
                 }
