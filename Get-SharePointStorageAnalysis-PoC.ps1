@@ -363,10 +363,16 @@ function Write-ToSharePointList {
 
                         if ($ownerList.Count -eq 0) {
                             # No email addresses to validate - just write without Owners
-                            $listItemValuesNoOwners = $listItemValues.Clone()
-                            $listItemValuesNoOwners.Remove("Owners")
-                            Add-PnPListItem -List $ListName -Values $listItemValuesNoOwners -ErrorAction Stop | Out-Null
-                            Write-Warning "  [NO VALID OWNERS] Original Owners value was '$($item.Owners)' (no email addresses found). Writing without Owners field."
+                            try {
+                                $listItemValuesNoOwners = $listItemValues.Clone()
+                                $listItemValuesNoOwners.Remove("Owners")
+                                Add-PnPListItem -List $ListName -Values $listItemValuesNoOwners -ErrorAction Stop | Out-Null
+                                Write-Warning "  [NO VALID OWNERS] Original Owners value was '$($item.Owners)' (no email addresses found). Writing without Owners field."
+                            }
+                            catch {
+                                Write-Warning "  [WRITE FAILED] Could not write item even without Owners field: $($_.Exception.Message). Skipping $($item.SubsiteUrl)"
+                                continue
+                            }
                         }
                         else {
                             $validOwners = @()
@@ -386,16 +392,38 @@ function Write-ToSharePointList {
 
                             # Retry the write with only valid owners
                             if ($validOwners.Count -gt 0) {
-                                $listItemValues["Owners"] = $validOwners -join "; "
-                                Add-PnPListItem -List $ListName -Values $listItemValues -ErrorAction Stop | Out-Null
-                                Write-Warning "  [GHOST USERS FILTERED] Removed ghost user(s): $($ghostOwners -join ', '). Added $($validOwners.Count) valid owner(s)."
+                                try {
+                                    $listItemValues["Owners"] = $validOwners -join "; "
+                                    Add-PnPListItem -List $ListName -Values $listItemValues -ErrorAction Stop | Out-Null
+                                    Write-Warning "  [GHOST USERS FILTERED] Removed ghost user(s): $($ghostOwners -join ', '). Added $($validOwners.Count) valid owner(s)."
+                                }
+                                catch {
+                                    # Even the filtered list failed - try without Owners entirely as last resort
+                                    Write-Warning "  [RETRY FAILED] Filtered owners still failed. Attempting to write without Owners field..."
+                                    try {
+                                        $listItemValuesNoOwners = $listItemValues.Clone()
+                                        $listItemValuesNoOwners.Remove("Owners")
+                                        Add-PnPListItem -List $ListName -Values $listItemValuesNoOwners -ErrorAction Stop | Out-Null
+                                        Write-Warning "  [FALLBACK SUCCESS] Wrote without Owners. Original list: $($item.Owners)"
+                                    }
+                                    catch {
+                                        Write-Warning "  [WRITE FAILED] Could not write item even without Owners field: $($_.Exception.Message). Skipping $($item.SubsiteUrl)"
+                                        continue
+                                    }
+                                }
                             }
                             else {
                                 # All owners were invalid - write without Owners field
-                                $listItemValuesNoOwners = $listItemValues.Clone()
-                                $listItemValuesNoOwners.Remove("Owners")
-                                Add-PnPListItem -List $ListName -Values $listItemValuesNoOwners -ErrorAction Stop | Out-Null
-                                Write-Warning "  [ALL OWNERS GHOSTS] All owners were invalid ($($ghostOwners -join ', ')). Writing without Owners field."
+                                try {
+                                    $listItemValuesNoOwners = $listItemValues.Clone()
+                                    $listItemValuesNoOwners.Remove("Owners")
+                                    Add-PnPListItem -List $ListName -Values $listItemValuesNoOwners -ErrorAction Stop | Out-Null
+                                    Write-Warning "  [ALL OWNERS GHOSTS] All owners were invalid ($($ghostOwners -join ', ')). Writing without Owners field."
+                                }
+                                catch {
+                                    Write-Warning "  [WRITE FAILED] Could not write item even without Owners field: $($_.Exception.Message). Skipping $($item.SubsiteUrl)"
+                                    continue
+                                }
                             }
                         }
                     }
