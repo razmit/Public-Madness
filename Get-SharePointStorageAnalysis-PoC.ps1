@@ -344,12 +344,27 @@ function Write-ToSharePointList {
                     DirectChildCount          = $item.DirectChildCount
                     WebTemplate               = $item.WebTemplate
                     IsClassic                 = $item.IsClassic
-                    Created                   = $item.Created
+                    SiteCreated               = $item.SiteCreated
                     LastActivity              = $item.LastActivity
                     Owners                    = $item.Owners  # Semicolon-separated emails - SharePoint will auto-resolve
                 }
 
-                Add-PnPListItem -List $ListName -Values $listItemValues -ErrorAction Stop | Out-Null
+                try {
+                    Add-PnPListItem -List $ListName -Values $listItemValues -ErrorAction Stop | Out-Null
+                }
+                catch {
+                    # Ghost users (deleted/inactive AAD accounts) cause a "could not be found" error
+                    # on Person fields. Retry without Owners so the row is still written.
+                    if ($_.Exception.Message -match "could not be found") {
+                        Write-Warning "  [GHOST USER] $($item.SubsiteUrl) - could not resolve one or more owners ($($item.Owners)). Writing row without Owners field."
+                        $listItemValuesNoOwners = $listItemValues.Clone()
+                        $listItemValuesNoOwners.Remove("Owners")
+                        Add-PnPListItem -List $ListName -Values $listItemValuesNoOwners -ErrorAction Stop | Out-Null
+                    }
+                    else {
+                        throw
+                    }
+                }
                 $written++
             }
 
@@ -490,7 +505,7 @@ try {
                         Owners       = $owners
                         LastActivity = $subsite.LastItemModifiedDate
                         WebTemplate  = $subsite.WebTemplate
-                        Created      = $subsite.Created
+                        SiteCreated  = $subsite.Created
                         IsLeaf       = $isLeaf
                     }
 
@@ -506,7 +521,7 @@ try {
                         Owners       = "Error"
                         LastActivity = $null
                         WebTemplate  = $subsite.WebTemplate
-                        Created      = $subsite.Created
+                        SiteCreated  = $subsite.Created
                         IsLeaf       = $isLeaf
                     }
                     $script:Errors += [PSCustomObject]@{ Site = $subsite.Url; Error = $_.Exception.Message }
@@ -569,7 +584,7 @@ try {
                     DirectChildCount        = $directChildCount          # Number (no decimals)
                     WebTemplate             = $webTemplate               # Single line of text
                     IsClassic               = $isClassic                 # Yes/No (boolean) - can be null
-                    Created                 = $metadataMap[$url].Created # DateTime
+                    SiteCreated             = $metadataMap[$url].SiteCreated # DateTime
                     LastActivity            = $metadataMap[$url].LastActivity  # DateTime
                     Owners                  = $metadataMap[$url].Owners  # Person or Group (allow multiple selections) - semicolon-separated emails
                 }
