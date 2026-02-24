@@ -378,22 +378,19 @@ function Write-ToSharePointList {
                             $validOwners = @()
                             $ghostOwners = @()
 
-                            # Get all users from the list site once (more efficient than per-user lookups)
-                            # Match by Email property since Get-PnPUser -Identity doesn't accept plain emails
-                            try {
-                                $allSiteUsers = Get-PnPUser -ErrorAction Stop
-                                $siteUserEmails = $allSiteUsers | Where-Object { $_.Email } | Select-Object -ExpandProperty Email
-                            }
-                            catch {
-                                Write-Warning "  [USER LOOKUP FAILED] Could not retrieve site users for validation. Attempting write without Owners..."
-                                $siteUserEmails = @()
-                            }
-
+                            # Use EnsureUser REST API to validate each owner against AAD directly.
+                            # This is the authoritative check - if EnsureUser succeeds, SharePoint
+                            # can resolve the user. Get-PnPUser without -Identity only returns users
+                            # already in the site's User Information List, which misses valid users
+                            # who have never visited this particular site.
                             foreach ($ownerEmail in $ownerList) {
-                                if ($siteUserEmails -contains $ownerEmail) {
+                                try {
+                                    $ensureUserBody = '{"logonName":"' + $ownerEmail + '"}'
+                                    Invoke-PnPSPRestMethod -Url "/_api/web/ensureuser" -Method Post -Content $ensureUserBody -ContentType "application/json" -ErrorAction Stop | Out-Null
                                     $validOwners += $ownerEmail
                                 }
-                                else {
+                                catch {
+                                    # EnsureUser failed - user is truly a ghost (deleted/not in AAD)
                                     $ghostOwners += $ownerEmail
                                 }
                             }
