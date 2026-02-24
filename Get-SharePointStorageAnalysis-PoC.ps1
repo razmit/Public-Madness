@@ -48,10 +48,10 @@ param(
     [int]$TopSubsitesPercentage = 20,
 
     [Parameter(Mandatory=$false)]
-    [string]$SharePointListUrl = "https://rsmnet.sharepoint.com/sites/YourTeamSite",
+    [string]$SharePointListUrl = "https://rsmnet.sharepoint.com/sites/IWS_IT_SharePoint_M365_Solutions",
 
     [Parameter(Mandatory=$false)]
-    [string]$ListName = "Storage Analysis"
+    [string]$ListName = "Tenant Storage Reporting"
 )
 
 # Check if PnP.PowerShell is available
@@ -344,7 +344,7 @@ function Write-ToSharePointList {
                     DirectChildCount          = $item.DirectChildCount
                     WebTemplate               = $item.WebTemplate
                     IsClassic                 = $item.IsClassic
-                    SiteCreated               = $item.SiteCreated
+                    SiteCreated                   = $item.Created
                     LastActivity              = $item.LastActivity
                     Owners                    = $item.Owners  # Semicolon-separated emails - SharePoint will auto-resolve
                 }
@@ -543,7 +543,7 @@ try {
                         Owners       = $owners
                         LastActivity = $subsite.LastItemModifiedDate
                         WebTemplate  = $subsite.WebTemplate
-                        SiteCreated  = $subsite.Created
+                        SiteCreated      = $subsite.Created
                         IsLeaf       = $isLeaf
                     }
 
@@ -559,7 +559,7 @@ try {
                         Owners       = "Error"
                         LastActivity = $null
                         WebTemplate  = $subsite.WebTemplate
-                        SiteCreated  = $subsite.Created
+                        SiteCreated      = $subsite.Created
                         IsLeaf       = $isLeaf
                     }
                     $script:Errors += [PSCustomObject]@{ Site = $subsite.Url; Error = $_.Exception.Message }
@@ -622,7 +622,7 @@ try {
                     DirectChildCount        = $directChildCount          # Number (no decimals)
                     WebTemplate             = $webTemplate               # Single line of text
                     IsClassic               = $isClassic                 # Yes/No (boolean) - can be null
-                    SiteCreated             = $metadataMap[$url].SiteCreated # DateTime
+                    SiteCreated                 = $metadataMap[$url].Created # DateTime
                     LastActivity            = $metadataMap[$url].LastActivity  # DateTime
                     Owners                  = $metadataMap[$url].Owners  # Person or Group (allow multiple selections) - semicolon-separated emails
                 }
@@ -659,7 +659,7 @@ try {
     }
 
     # Export results to CSV (commented out - using SharePoint List instead)
-    # Uncomment this section if you need CSV export in addition to SharePoint List
+    # Uncomment this section for CSV export in addition to SharePoint List
     <#
     Write-Host "`n======================================================" -ForegroundColor Cyan
     Write-Host "EXPORTING RESULTS" -ForegroundColor Cyan

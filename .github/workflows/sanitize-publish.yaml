@@ -60,7 +60,7 @@ jobs:
                   filename=$(basename $file)
                   
                   # Check if it is a SharePoint/PnP script
-                  if echo "$filename" | grep -qE "(Lock-Source|Export-Site|Migration|VAAP|Perm|Mass_|Upload_files|Whitelist|Recreate|Export_all|Export_tenant|Detect_|Find_lost|Auto_migrate)"; then
+                  if echo "$filename" | grep -qE "(Lock-Source|Export-Site|Migration|Perm|Mass_|Upload_files|Whitelist|Recreate|Export_all|Export_tenant|Detect_|Find|Auto_migrate)"; then
                     echo " → SharePoint: $filename"
                     cp "$file" portfolio-repo/PowerShell/SharePoint-Administration/
                     

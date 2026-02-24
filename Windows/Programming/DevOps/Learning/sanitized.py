@@ -1,4 +1,5 @@
 import yaml
+import re
 import os
 from pathlib import Path
 import argparse
@@ -40,7 +41,23 @@ def sanitize_content(content, replacements):
             
     return sanitized, replacements_made
 
-def sanitize_file(input_file, output_dir, replacements):
+def sanitize_content_regex(content, regex_rules):
+    """ Apply regex-based pattern replacements to the content. """
+    sanitized = content
+    replacements_made = {}
+
+    for rule in regex_rules:
+        pattern = rule['pattern']
+        replacement = rule['replacement']
+        description = rule.get('description', pattern)
+
+        sanitized, count = re.subn(pattern, replacement, sanitized, flags=re.IGNORECASE)
+        if count > 0:
+            replacements_made[description] = count
+
+    return sanitized, replacements_made
+
+def sanitize_file(input_file, output_dir, replacements, regex_replacements=None):
     """ Sanitize a single PowerShell file from my work scripts. """
     # Read the original file
     print(f"\nReading file: {input_file}")
@@ -49,7 +66,12 @@ def sanitize_file(input_file, output_dir, replacements):
         
     print("Applying sanitization...")
     sanitized_content, replacements_made = sanitize_content(original_content, replacements)
-    
+
+    # Apply regex-based replacements after literal ones
+    regex_replacements_made = {}
+    if regex_replacements:
+        sanitized_content, regex_replacements_made = sanitize_content_regex(sanitized_content, regex_replacements)
+
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
     
@@ -64,11 +86,18 @@ def sanitize_file(input_file, output_dir, replacements):
     
     # Print replacements made if any
     if replacements_made:
-        print("Replacements made:")
+        print("Literal replacements made:")
         for original, count in replacements_made.items():
-            print(f" {original} → {replacements[original]} (replaced {count} times)")
+            print(f"  {original} → {replacements[original]} (replaced {count} times)")
     else:
-        print("No replacements were made.")
+        print("No literal replacements were made.")
+
+    if regex_replacements_made:
+        print("Regex replacements made:")
+        for description, count in regex_replacements_made.items():
+            print(f"  [{description}] (replaced {count} times)")
+    elif regex_replacements:
+        print("No regex replacements were made.")
     
     return output_file
 
@@ -93,8 +122,10 @@ if __name__ == "__main__":
     config = load_config(args.config)
     replacements = config['replacements']
     output_dir = config['output_directory']
-    
-    print(f"\nLoaded: {len(replacements)} sanitization rules.")
+    regex_replacements = config.get('regex_replacements', [])
+
+    print(f"\nLoaded: {len(replacements)} literal sanitization rules.")
+    print(f"Loaded: {len(regex_replacements)} regex sanitization rules.")
     print(f"Output directory: {output_dir}.")
     
     # Iterate through files to sanitize
@@ -104,7 +135,7 @@ if __name__ == "__main__":
     
     for ps1_file in base_dir.rglob('*.ps1'):
         print(f"Processing file: {ps1_file.name}")
-        sanitize_file(str(ps1_file), output_dir, replacements)
+        sanitize_file(str(ps1_file), output_dir, replacements, regex_replacements)
     
     
     # for item in os.listdir(base_dir):
