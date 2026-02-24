@@ -354,12 +354,50 @@ function Write-ToSharePointList {
                 }
                 catch {
                     # Ghost users (deleted/inactive AAD accounts) cause a "could not be found" error
-                    # on Person fields. Retry without Owners so the row is still written.
+                    # on Person fields. Test each owner individually and keep only valid ones.
                     if ($_.Exception.Message -match "could not be found") {
-                        Write-Warning "  [GHOST USER] $($item.SubsiteUrl) - could not resolve one or more owners ($($item.Owners)). Writing row without Owners field."
-                        $listItemValuesNoOwners = $listItemValues.Clone()
-                        $listItemValuesNoOwners.Remove("Owners")
-                        Add-PnPListItem -List $ListName -Values $listItemValuesNoOwners -ErrorAction Stop | Out-Null
+                        Write-Warning "  [GHOST USER DETECTED] $($item.SubsiteUrl) - one or more owners could not be resolved. Testing each owner individually..."
+
+                        # Parse owner emails (skip non-email values like "No owner group", "Error", etc.)
+                        $ownerList = $item.Owners -split "; " | Where-Object { $_ -and $_ -match "@" }
+
+                        if ($ownerList.Count -eq 0) {
+                            # No email addresses to validate - just write without Owners
+                            $listItemValuesNoOwners = $listItemValues.Clone()
+                            $listItemValuesNoOwners.Remove("Owners")
+                            Add-PnPListItem -List $ListName -Values $listItemValuesNoOwners -ErrorAction Stop | Out-Null
+                            Write-Warning "  [NO VALID OWNERS] Original Owners value was '$($item.Owners)' (no email addresses found). Writing without Owners field."
+                        }
+                        else {
+                            $validOwners = @()
+                            $ghostOwners = @()
+
+                            foreach ($ownerEmail in $ownerList) {
+                                try {
+                                    # Try to resolve the user on the List site to validate they exist
+                                    Get-PnPUser -Identity $ownerEmail -ErrorAction Stop | Out-Null
+                                    $validOwners += $ownerEmail
+                                }
+                                catch {
+                                    # User doesn't exist or is inactive
+                                    $ghostOwners += $ownerEmail
+                                }
+                            }
+
+                            # Retry the write with only valid owners
+                            if ($validOwners.Count -gt 0) {
+                                $listItemValues["Owners"] = $validOwners -join "; "
+                                Add-PnPListItem -List $ListName -Values $listItemValues -ErrorAction Stop | Out-Null
+                                Write-Warning "  [GHOST USERS FILTERED] Removed ghost user(s): $($ghostOwners -join ', '). Added $($validOwners.Count) valid owner(s)."
+                            }
+                            else {
+                                # All owners were invalid - write without Owners field
+                                $listItemValuesNoOwners = $listItemValues.Clone()
+                                $listItemValuesNoOwners.Remove("Owners")
+                                Add-PnPListItem -List $ListName -Values $listItemValuesNoOwners -ErrorAction Stop | Out-Null
+                                Write-Warning "  [ALL OWNERS GHOSTS] All owners were invalid ($($ghostOwners -join ', ')). Writing without Owners field."
+                            }
+                        }
                     }
                     else {
                         throw
