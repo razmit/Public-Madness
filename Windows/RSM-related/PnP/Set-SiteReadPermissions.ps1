@@ -145,8 +145,10 @@ function Set-PrincipalToRead {
         return
     }
 
-    # ── Skip: any assignment that includes Full Control is left untouched
-    if ($CurrentRoles -contains "Full Control") {
+    # ── Skip: any assignment whose roles include "Full Control" — matched as a
+    #    substring so that custom levels like "Full Control - no site creation"
+    #    are caught alongside the built-in "Full Control" level.
+    if ($CurrentRoles | Where-Object { $_ -like "*Full Control*" }) {
         Write-Log "    [PRESERVE] $PrincipalTitle — Full Control kept intact (roles: $($CurrentRoles -join ', '))" -Level Preserve
         $script:FullControlKept++
         return
