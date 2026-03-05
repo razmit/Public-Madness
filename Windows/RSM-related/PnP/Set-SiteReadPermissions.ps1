@@ -93,7 +93,6 @@ $script:Errors           = @()
 # ── Logging helper ────────────────────────────────────────────────────────────
 function Write-Log {
     param(
-        [Parameter(Mandatory=$true)]
         [string]$Message,
 
         [ValidateSet("Info","Success","Warning","Error","Action","Preserve","Verbose")]
