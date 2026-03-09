@@ -155,7 +155,7 @@ catch {
 Write-Host "[2/3] Enumerating all site collections (excluding personal/OneDrive sites)..." -ForegroundColor Yellow
 try {
     # Filter=IsHubSite doesn't help us; grab everything and exclude OneDrive (/personal/)
-    $allSites = Get-PnPTenantSite -IncludeOneDriveSites $false -ErrorAction Stop |
+    $allSites = Get-PnPTenantSite -ErrorAction Stop |
                 Where-Object { $_.Url -notlike "*/personal/*" }
     Write-Host "      Found $($allSites.Count) site collections." -ForegroundColor Green
 }
