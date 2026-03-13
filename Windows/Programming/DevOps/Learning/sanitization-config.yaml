@@ -7,6 +7,9 @@ replacements:
   rsmus: company
   rsmnet: companynet
   mcgladrey: company_old
+  E095713: LOCAL_USER
+  National Tax PMO Owners: Perm_Group_1
+  Tax Services Project Owners: Perm_Group_2
   
   # SharePoint URLs
   rsmnet.sharepoint.com: companynet.sharepoint.com
@@ -14,10 +17,32 @@ replacements:
   # Client IDs
   f6666fe0-04e6-419a-b4bb-4025060af8f5: CLIENT_ID
   
-  # Internal URLs (domains only - preserves paths)
+  # Internal URLs (domains only - paths are handled by regex_replacements below)
   dash.rsmus.com: dashboard.company.com
   secret.mcgladrey.rsm.net: secrets.companynet.com
   sso.rsmus.com: sso.company.com
+
+# Regex-based sanitization rules (applied after literal replacements above)
+# Pattern uses Python regex syntax. Replacement supports backreferences (\1, \2, etc.)
+regex_replacements:
+
+  # SharePoint/Azure GUIDs: 8-4-4-4-12 hex format used for list, library, and component IDs.
+  # Note: the specific client ID above is already caught by the literal replacement;
+  # this rule catches every other GUID that may appear in the scripts.
+  - description: 'SharePoint GUID/ID'
+    pattern: '\b[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\b'
+    replacement: 'SHAREPOINT_ID'
+
+  # SharePoint URL paths: sanitizes the site/team/personal name and everything after it.
+  # Matches /sites/..., /teams/..., or /personal/... and replaces with a generic placeholder,
+  # keeping the path type prefix (\1) for readability.
+  # Examples:
+  #   /sites/NationalTaxPMO/Lists/Tasks  ->  /sites/SITE_NAME
+  #   /teams/FinanceTeam                 ->  /teams/SITE_NAME
+  #   /personal/john_doe_company_com     ->  /personal/SITE_NAME
+  - description: 'SharePoint URL path'
+    pattern: '/(sites|teams|personal)/[^\s"<>)]+'
+    replacement: '/\1/SITE_NAME'
 
 # File patterns to process
 file_patterns:
