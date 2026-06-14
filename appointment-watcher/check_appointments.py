@@ -12,18 +12,23 @@ TERMINY_URL = "https://api.e-konsulat.gov.pl/api/rezerwacja-wizyt-wizowych/termi
 BOOKING_URL = "https://secure.e-konsulat.gov.pl/placowki/216/wiza-krajowa/wizyty/weryfikacja-obrazkowa"
 
 NOTIFY_EMAIL = "rolin.azmitia.iii@gmail.com"
-HEADERS = {
-    "Content-Type": "application/json",
-    "Origin": "https://secure.e-konsulat.gov.pl",
-    "Referer": "https://secure.e-konsulat.gov.pl/placowki/216/wiza-krajowa/wizyty/weryfikacja-obrazkowa",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-}
 
-def generate_captcha() -> dict:
-    r = requests.post(
+
+def make_session() -> requests.Session:
+    s = requests.Session()
+    s.headers.update({
+        "Content-Type": "application/json",
+        "Origin": "https://secure.e-konsulat.gov.pl",
+        "Referer": BOOKING_URL,
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    })
+    return s
+
+
+def generate_captcha(session: requests.Session) -> dict:
+    r = session.post(
         GENERUJ_URL,
         json={"imageWidth": 100, "imageHeight": 50},
-        headers=HEADERS,
         timeout=15,
     )
     r.raise_for_status()
@@ -61,11 +66,10 @@ def solve_captcha(image_b64: str, char_count: int) -> str:
     return response.content[0].text.strip()
 
 
-def verify_captcha(captcha_id: str, kod: str) -> tuple[bool, str]:
-    r = requests.post(
+def verify_captcha(session: requests.Session, captcha_id: str, kod: str) -> tuple[bool, str]:
+    r = session.post(
         SPRAWDZ_URL,
         json={"kod": kod, "token": captcha_id},
-        headers=HEADERS,
         timeout=15,
     )
     r.raise_for_status()
@@ -73,11 +77,10 @@ def verify_captcha(captcha_id: str, kod: str) -> tuple[bool, str]:
     return data.get("ok", False), data.get("token", "")
 
 
-def check_appointments(captcha_token: str) -> dict:
-    r = requests.post(
+def check_appointments(session: requests.Session, captcha_token: str) -> dict:
+    r = session.post(
         TERMINY_URL,
         json={"captchaToken": captcha_token},
-        headers=HEADERS,
         timeout=15,
     )
     r.raise_for_status()
@@ -95,12 +98,14 @@ def send_email(subject: str, body: str) -> None:
 
 
 def main() -> None:
+    session = make_session()
     captcha_token = None
+
     for attempt in range(1, 4):
-        captcha = generate_captcha()
+        captcha = generate_captcha(session)
         kod = solve_captcha(captcha["image"], captcha["iloscZnakow"])
         print(f"Attempt {attempt}: CAPTCHA solved as '{kod}'")
-        ok, captcha_token = verify_captcha(captcha["id"], kod)
+        ok, captcha_token = verify_captcha(session, captcha["id"], kod)
         if ok:
             print("CAPTCHA accepted.")
             break
@@ -109,7 +114,7 @@ def main() -> None:
         print("ERROR: CAPTCHA failed after 3 attempts.", file=sys.stderr)
         sys.exit(1)
 
-    result = check_appointments(captcha_token)
+    result = check_appointments(session, captcha_token)
     dates = result.get("tabelaDni", [])
     queue = result.get("wolneMiejscaWKolejce", False)
 
