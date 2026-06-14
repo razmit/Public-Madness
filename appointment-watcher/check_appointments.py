@@ -12,8 +12,12 @@ TERMINY_URL = "https://api.e-konsulat.gov.pl/api/rezerwacja-wizyt-wizowych/termi
 BOOKING_URL = "https://secure.e-konsulat.gov.pl/placowki/216/wiza-krajowa/wizyty/weryfikacja-obrazkowa"
 
 NOTIFY_EMAIL = "rolin.azmitia.iii@gmail.com"
-HEADERS = {"Content-Type": "application/json"}
-
+HEADERS = {
+    "Content-Type": "application/json",
+    "Origin": "https://secure.e-konsulat.gov.pl",
+    "Referer": "https://secure.e-konsulat.gov.pl/placowki/216/wiza-krajowa/wizyty/weryfikacja-obrazkowa",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+}
 
 def generate_captcha() -> dict:
     r = requests.post(
